@@ -12,9 +12,10 @@ from copy import deepcopy
 
 import pandas as pd
 import numpy as np
-import fast_lot_math as flm
 
-from market_data_class import MarketData
+# Directory with on-period optimizer codebase
+import config
+import fast_lot_math as flm
 from dateutil.relativedelta import relativedelta
 from pretty_print import df_to_format
 
@@ -96,42 +97,6 @@ class PortLots:
 
         return df
 
-    def update_market_data(self, mdata: MarketData) -> None:
-        """ Add columns / stats that depend on market data """
-
-        # Drop df_stocks columns with old data that we will overwrite
-        self.df_stocks = self.df_stocks[['w_tgt', 'shares', 'no_buys', 'no_sells']]
-
-        # Merge portfolio and market dataframes
-        self.df_stocks = self.df_stocks.join(mdata.df, how='left')
-        self.df_stocks.rename(columns={'last': 'price'}, inplace=True)
-
-        # Calculate market values, weights and active positions
-        self.df_stocks['mkt_vals'] = self.df_stocks['shares'] * self.df_stocks['price']
-        self.port_value = self.df_stocks['mkt_vals'].sum() + self.cash
-        self.df_stocks['w'] = self.df_stocks['mkt_vals'] / self.port_value
-        self.df_stocks['w_actv'] = self.df_stocks['w'] - self.df_stocks['w_tgt']
-
-        # Add column of prices to the lots dataframe and calculate % gain
-        self.df_lots['price'] = self.df_lots['ticker'].apply(lambda x: self.df_stocks.loc[x, 'price'])
-
-        self.df_lots['%_gain'] = np.where(self.df_lots['basis'] > 0, self.df_lots['price']
-                                          / self.df_lots['basis'] - 1, 999)
-
-        # Update expected active ret (column shows contribution to _porfolio_ return)
-        self.df_stocks['exp_r_actv'] = self.df_stocks['xret'] * self.df_stocks['w_actv']
-        self.exp_r_actv = self.df_stocks['exp_r_actv'].sum()
-
-        # Update expected active risk
-        self.sig_active = np.sqrt(self.df_stocks['w_actv'].T @ mdata.cov_matrix
-                                  @ self.df_stocks['w_actv'] * mdata.ANN_FACTOR)
-        self.beta_active = (self.df_stocks['w_actv'] * self.df_stocks['beta']).sum()
-
-        # Rename and re-arrange columns in a logical order
-        self.df_stocks = self.df_stocks[['w_tgt', 'w', 'w_actv', 'shares', 'price', 'mkt_vals',
-                                         'no_buys', 'no_sells', 'beta', 'alpha', 'xret',
-                                         'exp_r_actv', 'vols']]
-
     def __str__(self) -> str:
         """ Pretty print details of the portfolio"""
 
@@ -185,12 +150,11 @@ class PortLots:
     def lots_report(self, to_str: bool = True) -> Optional[str]:
         """ Print report of lots """
 
+        # Columns to include in the report
+        rpt_cols = ['ticker', 'start_date', 'shares', 'basis', 'price', '%_gain']
         # Specify format for the lots matrix
         fmt_df = {
-            'shares': '{:,.0f}',
-            '%_gain': '{:.2f}',
-            '%_basis': '{:.2f}',
-            # '_dflt': '{}'
+            '_dflt': '{:.2f}'
         }
 
         mult_df = {'%_gain': 100}
@@ -212,75 +176,6 @@ class PortLots:
         new_port = deepcopy(self)
         return new_port
 
-    def rebalance(self, trades: pd.Series, mdata: MarketData) -> dict:
-        """ Rebalance the current portfolio inplace """
-
-        # Lots must be sorted (pre-processed), otherwise we don't know how to do allocations
-        assert ((self.lot_stats != {}) and self.lot_stats['lots_sorted']), \
-            "Rebalance attempted, before pre-processing lots."
-
-        # trades must be in the same stocks that we own (it's possible to buy new stocks, but we'll implement this later
-        assert (trades.index.values == self.df_stocks.index.values).all(), \
-            "Trades and Positions series indices are not the same."
-
-        # Check if the rebalance is valid
-        assert (-trades <= self.df_stocks['max_sell']).all(), \
-            "Some trades exceeds max_sell."
-
-        # Update macro variables
-        # Calculate post-rebalance portfoio metrics
-        trx_cost = (np.abs(trades) * self.df_stocks['price'] * mdata.trx_cost).sum()
-        self.port_value = self.port_value - trx_cost
-        rebal_cost = trades @ self.df_stocks['price']
-        self.cash = self.cash - rebal_cost - trx_cost
-
-        # =========================================================
-        # Update lots - at this stage it does not need to be fast
-        # =========================================================
-        df_lots = self.df_lots  # set up an alias / view for brevity
-
-        # For shorts - we reduce the size
-        max_id = df_lots.index.max()
-        tkr_block_idx = self.lot_stats['tkr_block_idx']
-        df_lots['old_shares'] = df_lots['shares']
-        df_lots['to_sell'] = -np.minimum(trades.values[self.lot_stats['tkr_broadcast_idx']], 0)
-        df_lots['cum_sold'] = np.minimum(df_lots['to_sell'], df_lots['cum_shrs'])
-        df_lots['cum_left'] = df_lots['cum_shrs'] - df_lots['cum_sold']
-        df_lots['shares'] = flm.intervaled_diff(df_lots['cum_left'].values, tkr_block_idx)
-
-        # Work out total tqx paid on the sales
-        df_lots['sold'] = flm.intervaled_diff(df_lots['cum_sold'].values, tkr_block_idx)
-        tax = df_lots['sold'].values @ self.lot_stats['tax_per_shr']
-
-        # Drop rows without positions
-        df_lots = df_lots[df_lots['shares'] > 0]
-
-        # For long - append to the dataframe
-        df_new_lots = pd.DataFrame(trades)
-        df_new_lots['price'] = self.df_stocks['price']
-        df_new_lots = df_new_lots[trades > 0].reset_index()
-        df_new_lots.columns = ['ticker', 'shares', 'price']
-        df_new_lots['Id'] = np.arange(len(df_new_lots)) + max_id + 1
-        df_new_lots['start_date'] = self.t_date
-        df_new_lots['basis'] = df_new_lots['price'] * (1 + mdata.trx_cost)
-        df_new_lots.set_index('Id', inplace=True)
-
-        # Concatenate the old and the new lots
-        self.df_lots = pd.concat([df_lots, df_new_lots])
-
-        # Update positions in the stocks dataframe
-        self.df_stocks['shares'] = self.df_lots.groupby('ticker')['shares'].sum()
-
-        # Run update_mkt_data to recalculate all new values from positions
-        self.update_market_data(mdata)
-
-        # Collect and output rebalance stats
-        data_dict = {'tax': tax,
-                     'trx_cost': trx_cost,
-                     'rebal_cost': rebal_cost}
-
-        return data_dict
-
     def process_lots(self, taxes: dict, t_date: dt.datetime) -> None:
         """ Pre-process lots and create the necessary np arrays for fast calculation of taxes
             Equivalent to the LotsLiability.__init__()
@@ -290,10 +185,23 @@ class PortLots:
         # Alias some variables for brevity
         df_stocks = self.df_stocks
         df_lots = self.df_lots
-        n_lots = len(df_lots)
 
-        # Ensure that lots have been sorted at least by ticker
+
+        # Ensure that we have at least 1 lot per stock.  If for some stocks there are none,
+        # add dummy lots with zero positions
+        stk_not_in_lots = set(df_stocks.index).difference(set(df_lots['ticker'].values))
+        if stk_not_in_lots:
+            dummy_lots = pd.DataFrame(stk_not_in_lots, columns=['ticker'])
+            dummy_lots['start_date'] = t_date
+            dummy_lots['shares'] = 0
+            dummy_lots['basis'] = np.finfo(float).eps
+            dummy_lots['%_gain'] = np.finfo(float).max
+            df_lots = pd.concat([df_lots, dummy_lots], axis=0)
+
+        # Sort lots by ticker
+        n_lots = len(df_lots)
         df_lots.sort_values(by='ticker', inplace=True)
+        df_lots.reset_index(drop=True, inplace=True)
 
         # Calculate index of the first elements of each group of stocks
         tkr_block_idx = np.ravel(flm.block_start_index_pd(df_lots, col='ticker'))
@@ -342,25 +250,27 @@ class PortLots:
         self.lot_stats['tkr_block_sizes'] = tkr_block_sizes
         self.lot_stats['tkr_broadcast_idx'] = tkr_broadcast_idx
 
+        # Update the lots table in the portfolio structure
+        self.df_lots = df_lots
+
     # **************************************************
     # Functions used for simplified simulation
     # **************************************************
-    def update_sim_data(self, out_dict=None, t=0):
+    def update_sim_data(self, sim_data=None, t=0):
         """ Update portfolio when we are doing a simplified simulation
             Don't worry about details like 'alpha', 'beta', etc. for now """
 
         # Update value date
-        self.t_date = out_dict['dates'][t]
+        self.t_date = sim_data['dates'][t]
 
         # Update target stock weights and shares
-        self.df_stocks['w_tgt'] = out_dict['w'][t]
+        self.df_stocks['w_tgt'] = sim_data['w'][t]
         self.df_stocks['shares'] = self.df_lots.groupby('ticker')['shares'].sum()
-        #TODO - Check if I need to have fillna here?
 
         # Drop df_stocks columns with old data that we will overwrite
         self.df_stocks = self.df_stocks[['w_tgt', 'shares', 'no_buys', 'no_sells']].fillna(0)
 
-        self.df_stocks['price'] = out_dict['px'].values[t, :]
+        self.df_stocks['price'] = sim_data['px'].values[t, :]
 
         # Calculate market values, weights and active positions
         self.df_stocks['mkt_vals'] = self.df_stocks['shares'] * self.df_stocks['price']
@@ -428,7 +338,7 @@ class PortLots:
 
         return output
 
-    def rebal_sim(self, trades: pd.Series, out_dict: dict, t=0) -> dict:
+    def rebal_sim(self, trades: pd.Series, sim_data: dict, t=0) -> dict:
         """ Rebalance simulation"""
 
         # Lots must be sorted (pre-processed), otherwise we don't know how to do allocations
@@ -446,10 +356,10 @@ class PortLots:
         # Update macro variables
         # Calculate post-rebalance portfoio metrics
         # Calculate post-rebalance portfoio metrics
-        trx_cost = (np.abs(trades) * self.df_stocks['price'] * out_dict['trx_cost']).sum()
+        trx_cost = (np.abs(trades) * self.df_stocks['price'] * sim_data['trx_cost']).sum()
         self.port_value = self.port_value - trx_cost
-        rebal_cost = trades @ self.df_stocks['price']
-        self.cash = self.cash - rebal_cost - trx_cost
+        net_buy = trades @ self.df_stocks['price']
+        self.cash = self.cash - net_buy - trx_cost
 
         # =========================================================
         # Update lots - at this stage it does not need to be fast
@@ -470,7 +380,7 @@ class PortLots:
         tax = df_lots['sold'].values @ self.lot_stats['tax_per_shr']
 
         # Drop rows without positions
-        df_lots = df_lots[df_lots['shares'] > 0]
+        df_lots = df_lots[df_lots['shares'] > config.tol]
 
         # Append new buy lots to the dataframe
         df_new_lots = pd.DataFrame(trades)
@@ -478,23 +388,51 @@ class PortLots:
         df_new_lots = df_new_lots[trades > 0].reset_index()
         df_new_lots.columns = ['ticker', 'shares', 'price']
         df_new_lots['Id'] = np.arange(len(df_new_lots)) + max_id + 1
-        df_new_lots['start_date'] = self.t_date #TODO - check if this is right
-        df_new_lots['basis'] = df_new_lots['price'] * (1 + out_dict['trx_cost'])
+        df_new_lots['start_date'] = self.t_date  # TODO - check if this is right
+        df_new_lots['basis'] = df_new_lots['price'] * (1 + sim_data['trx_cost'])
         df_new_lots.set_index('Id', inplace=True)
 
-        # Concatenate the old and the new lots
+        # Concatenate the old and the new lots, sort
         self.df_lots = pd.concat([df_lots, df_new_lots])
+        self.df_lots.sort_values(by=['ticker', 'start_date'], inplace=True)
+        self.df_lots.reset_index(drop=True, inplace=True)
 
         # Update positions in the stocks dataframe, if we sold the entire pos in a stock, set pos=0
         self.df_stocks['shares'] = self.df_lots.groupby('ticker')['shares'].sum()
         self.df_stocks['shares'].fillna(0, inplace=True)
 
         # Run update_mkt_data to recalculate all new values from positions
-        self.update_sim_data(out_dict=out_dict, t=t)
+        self.update_sim_data(sim_data=sim_data, t=t)
 
         # Collect and output rebalance stats
         data_dict = {'tax': tax,
                      'trx_cost': trx_cost,
-                     'rebal_cost': rebal_cost}
+                     'net_buy': net_buy}
 
         return data_dict
+
+    def reset_clock(self, reset_thresh: float = 0):
+        """ Sell and buy-back long-term positions so that they can be used again
+            for harvesting losses.  Assume that market data has been updated and
+            the portfolio has been marked to market.
+            For now, Don't worry about integrating with the harvesting/rebalance logic,
+            we can explore later if there are synergies.
+        """
+        df_lots = self.df_lots
+
+        # Update lots long-term eligibility and market data
+        lt_cutoff = self.t_date + relativedelta(years=-1)
+        df_lots['long_term'] = df_lots['start_date'] <= np.datetime64(lt_cutoff)
+        df_lots['mv'] = df_lots['shares'] * df_lots['price']
+
+        # Identify reset logs, update basis and start data
+        df_lots['reset_indic'] = (df_lots['%_gain'] >= reset_thresh) & df_lots['long_term']
+        df_lots['basis'] = np.where(df_lots['reset_indic'], df_lots['price'], df_lots['basis'])
+        df_lots['start_date'] = np.where(df_lots['reset_indic'], self.t_date, df_lots['start_date'])
+
+        # Calculate tax incurred in the reset
+        reset_tax = np.sum(df_lots['reset_indic'] * df_lots['tax per shr'] * df_lots['shares'])
+        # TODO - log trades that we have done in a better way
+        return reset_tax
+
+
