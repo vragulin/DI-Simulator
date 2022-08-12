@@ -2,8 +2,8 @@
     Direct index / tax harvesting simulation.  Based on James's embaTestbed2022.py.
     by V. Ragulin, started 3-Aug-2022
 """
-import sys
-
+import os
+from contextlib import suppress
 import numpy as np
 import pandas as pd
 
@@ -11,10 +11,12 @@ pd.options.display.float_format = '{:,.4f}'.format
 
 import config
 import index_math as im
-# import datetime as dt
+import datetime as dt
 import dateutil.relativedelta as du
 from port_lots_class import PortLots
 
+import logging
+from typing import Union
 
 # Directory with on-period optimizer codebase
 # sys.path.append('../DirectIndexing/src/optimizer/opt_with_lots')
@@ -55,7 +57,7 @@ def process_input_data(inputs: dict, return_override: float = None) -> dict:
     w_start = inputs['w_idx'].values
 
     # If specified, get price returns approximately equal to the overrride
-    if return_override:
+    if return_override is not None:
         idx_avg_ret = im.index_avg_return(w_start, px.values)
         d_px.iloc[1:, :] += (1 + return_override) ** (dt / config.ANN_FACTOR) - 1 - idx_avg_ret
         px = (1 + d_px).cumprod()
@@ -127,16 +129,20 @@ def init_sim_hist(port: PortLots, out_dict: dict) -> list:
     return sim_hist
 
 
-def print_port_report(port: PortLots, t: int, lots: bool = True) -> None:
-    """ Print report """
+def print_port_report(port: PortLots, t: int, lots: bool = True, log=True) -> None:
+    """ Print report.  If log=True send to logger, otherwise print
+    """
+    if log:
+        out_func = logging.info
+    else:
+        out_func = print
 
-    print(f"t = {t}")
-    print(port.sim_report())
+    out_func(f"t = {t}")
+    out_func(port.sim_report())
 
     if lots:
-        print("\nLots details")
-        # print(str(port.lots_report()))
-        print(port.df_lots[['ticker', 'start_date', 'shares', 'basis', 'price', '%_gain']])
+        out_func("\nLots details")
+        out_func(port.df_lots[['ticker', 'start_date', 'shares', 'basis', 'price', '%_gain']])
 
 
 def port_divs_during_period(port: PortLots, t: int, sim_data: dict) -> None:
@@ -288,13 +294,31 @@ def trade_history(sim_hist: list, sim_data: dict, shares_flag: bool = False) -> 
     return df_trades
 
 
-def run_sim(file: str):
+def pd_to_csv(df: Union[pd.DataFrame, pd.Series], file_code: str, suffix: str = None):
+    """ Write dataframe to a file, perform all checks """
+
+    if suffix is not None:
+        fname = 'results/' + file_code + '_' + suffix + ".csv"
+    else:
+        fname = 'results/' + file_code + ".csv"
+
+    # Silently remove existing file with the same name
+    with suppress(OSError):
+        os.remove(fname)
+
+    # Write
+    df.to_csv(fname)
+
+
+def run_sim(input_file: str, suffix=None):
     # Load simulation parameters from file
-    inputs = load_sim_settings_from_file(file)
+    inputs = load_sim_settings_from_file(input_file)
     params = inputs['params']['Value']
 
     # Process simulation params
-    return_override = None  # -0.05
+    return_override = 0.0  # -0.05, None
+    #TODO - manuall check harvest calculation
+    #  check if return_override = 0 is working (and not being considered None)
     sim_data = process_input_data(inputs, return_override=return_override)
 
     # Set up the initial portfolio matching t
@@ -308,28 +332,29 @@ def run_sim(file: str):
 
     # Loop over periods, rebalance / harvest at each period, keep track of P&L
     # Simulation parameter - maximum amount of stocks that we harvest at each step
-    max_harvest = 0.5
+    max_harvest = 0.6
 
     # Initialize the structure to keep simulation info
     sim_hist = init_sim_hist(port, sim_data)
     for t in range(1, len(sim_data['px'])):
         # Take account of the dividends that we have received during the period
         # Assume that all divs during the period happen on the last day (i.e. stocks are ex-div)
+        print(f"Step = {t}")
         port.cash += port_divs_during_period(port, t, sim_data)
 
         # Revalue portfolio
         port.update_sim_data(sim_data=sim_data, t=t)
-        print("\nBefore rebalance:")
+        logging.info("\nBefore rebalance:")
         print_port_report(port, t)
         # TODO - understand why this does not work when t=2
 
         # Work out the optimal rebalance (for now use heuristic)
         opt_res = heuristic_rebalance(port, t, sim_data, max_harvest)
-        print("Trades:")
-        print(opt_res['opt_trades'])
-        print(f"\nHarvest={opt_res['harvest']:.4f}, "
-              f"Potl Harvest={opt_res['potl_harvest']:.4f}, "
-              f"Ratio={opt_res['harv_ratio']:.3f}")
+        logging.info("Trades:")
+        logging.info(opt_res['opt_trades'])
+        logging.info(f"\nHarvest={opt_res['harvest']:.4f}, "
+                     f"Potl Harvest={opt_res['potl_harvest']:.4f}, "
+                     f"Ratio={opt_res['harv_ratio']:.3f}")
 
         # Execute the rebalance (for now don't worry about donations
         rebal_res = port.rebal_sim(trades=opt_res['opt_trades'], sim_data=sim_data, t=t)
@@ -349,33 +374,60 @@ def run_sim(file: str):
         sim_hist.append({'opt': opt_res, 'rebal': rebal_res, 'donate': donate_amount,
                          'clock_reset_tax': clock_reset_tax})
 
-    print("\nAfter final rebalance:")
+    logging.info("\nAfter final rebalance:")
     print_port_report(port, t)
-    # TODO - consider showing report as a dense matrix time x stocks, like James does it
-    #   while doing all calculations in sparce representation.
 
     print("\nSimulation results:")
     df_report = gen_sim_report(sim_hist, sim_data)
     print(df_report)
-    # TODO Print some kind of a summary statistic for portfolio growths
-    #   Test that it's consistent with the override (if it's used).
 
-    # Generate and print trade history
+    # Generate and save trade history
     df_trades = trade_history(sim_hist, sim_data, shares_flag=False)
-    print("\nTrade history - market value")
-    print(df_trades)
+    pd_to_csv(df_trades, "trades", suffix=timestamp)
 
     # Print total statistics
-    harvest = df_report['harvest'].sum()
-    potl_harvest = df_report['potl hvst'].sum()
+    harvest = (df_report['harvest'] / df_report['port_val']).sum()
+    potl_harvest = (df_report['potl hvst'] / df_report['port_val']).sum()
+    # TODO - think of a more sensible measure of harvest / pot'l harvest, like an IRR or PME
+    #     or at least scale it by portfolio value and represent in bp
+
     hvst_ratio = harvest / potl_harvest
-    total_tracking = df_report.iloc[-1]['port_val'] / df_report.iloc[-1]['bmk_val'] - 1
-    years = (len(df_report) - 1) * inputs['params'].loc['dt', 'Value'] / config.ANN_FACTOR
-    hvst_2_trk_ann = (harvest / total_tracking) / np.sqrt(years)
-    print(f"\nTotals:\nharvest={harvest:.4f}, potential harvest={potl_harvest:.4f}, ratio={hvst_ratio:.3f}")
-    print(f"Tracking={total_tracking:.4f}\nAnnualized harvest/tracking={hvst_2_trk_ann:.3f}")
+    freq = config.ANN_FACTOR / inputs['params'].loc['dt', 'Value']
+    years = (len(df_report) - 1) / freq
+    tracking_std = df_report['tracking'].dropna().std()
+    hvst_2_trk_ann = (harvest / years) / (tracking_std * np.sqrt(freq))
+    idx_ann_ret = (df_report.iloc[-1]['bmk_val'] / df_report.iloc[0]['bmk_val']) ** (1/years) - 1
+    port_ann_ret = (df_report.iloc[-1]['port_val'] / df_report.iloc[0]['port_val']) ** (1/years) - 1
+    # tracking_cum = df_report.iloc[-1]['port_val'] / df_report.iloc[-1]['bmk_val'] - 1
 
+    # Pack results into a datframe:
+    sim_stats = pd.Series(dtype='float64')
+    sim_stats['port_ret'] = port_ann_ret
+    sim_stats['index_ret'] = idx_ann_ret
+    sim_stats['tracking std'] = tracking_std * np.sqrt(freq)
+    sim_stats['harvest'] = harvest / years
+    sim_stats['potl harvest'] = potl_harvest / years
+    sim_stats['hvst/potl_hvst'] = hvst_ratio
+    sim_stats['hvst/tracking'] = hvst_2_trk_ann
 
+    print("\nSimulation statistics (annualized):")
+    print(sim_stats.to_string())
+    pd_to_csv(sim_stats, "stats", suffix=timestamp)
+
+#***********************************************************
+# Entry point
+#***********************************************************
 if __name__ == "__main__":
-    f = 'inputs/test5.xlsx'
-    run_sim(f)
+    timestamp = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
+    log_file = 'results/sim_' + timestamp + '.log'
+
+    # Silently remove prior log_files and set up logger
+    with suppress(OSError):
+        os.remove(log_file)
+
+    logging.basicConfig(level=logging.INFO, filename=log_file,
+                        format='%(message)s')
+    # Run simulation
+    input_file = 'inputs/test100.xlsx'
+    run_sim(input_file, suffix=timestamp)
+    print("\nDone")
