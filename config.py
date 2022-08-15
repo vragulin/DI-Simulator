@@ -17,3 +17,4 @@ tax = {'st': 0.5, 'lt': 0.28}
 
 # Commissions
 trx_cost = 0
+

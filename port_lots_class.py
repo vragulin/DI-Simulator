@@ -350,7 +350,7 @@ class PortLots:
             "Trades and Positions series indices are not the same."
 
         # Check if the rebalance is valid
-        if ~(-trades <= self.df_stocks['max_sell'] + np.finfo(float).eps).all():  # Check within computational tolerance
+        if (-trades > self.df_stocks['max_sell'] + np.finfo(float).eps).any():  # Check within computational tolerance
             print("Some trades exceeds max_sell.")
         # assert (-trades <= self.df_stocks['max_sell']).all(), \
         #     "Some trades exceeds max_sell."
