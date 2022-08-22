@@ -82,6 +82,26 @@ class PortLots:
         # A placeholder for lot-related data used for fast tax calculation
         self.lot_stats = {}
 
+    @classmethod
+    def init_portfolio_from_dict(cls, sim_data: dict) -> PortLots:
+        """ Initialize simulation portfolio, establish positions matching the index """
+        # TODO - re-write this as an alternative constructor (e.g. with multiple dispatch)
+
+        tickers = sim_data['tickers']
+        w_tgt = sim_data['w'][0, :]
+        cash = 1 - w_tgt.sum()
+        t_date = sim_data['dates'][0]
+
+        # Initial purchase lots (for now ignore transactions costs)
+        lots = pd.DataFrame(tickers, columns=['Ticker'])
+        lots['Start Date'] = t_date
+        lots['Shares'] = w_tgt
+        lots['Basis per Share'] = 1
+
+        # Instantiate the portfolio
+        port = cls(tickers, w_tgt=w_tgt, cash=cash, lots=lots, t_date=t_date)
+        return port
+
     def build_df_stocks(self) -> pd.DataFrame:
 
         """ Represent portfolio as a dataframe"""
@@ -434,7 +454,6 @@ class PortLots:
 
         # Calculate tax incurred in the reset
         reset_tax = np.sum(df_lots['reset_indic'] * df_lots['tax per shr'] * df_lots['shares'])
-        # TODO - log trades that we have done in a better way
         return reset_tax
 
 

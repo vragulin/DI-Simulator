@@ -2,6 +2,7 @@
 Useful functions to calculate index returns, weights, etc...
 """
 import numpy as np
+from typing import Optional
 
 
 def index_avg_return(shares: np.array, prices: np.array) -> float:
@@ -37,7 +38,11 @@ def index_weights_over_time(shares: np.array, prices: np.array) -> np.array:
                     if the first variable gives initial weights)
     :return: weights over time for each stock
     """
-    stock_vals = prices * shares.T
+    try:
+        stock_vals = prices * shares.T
+    except ValueError:
+        stock_vals = prices * shares
+
     idx_vals = stock_vals.sum(axis=1)
 
     return stock_vals / idx_vals.reshape(stock_vals.shape[0], -1)
@@ -61,20 +66,27 @@ def index_vals(shares: np.array, prices: np.array, norm=False) -> np.array:
         return idx_vals
 
 
-def total_ret_index(shares: np.array, prices: np.array, idx_div: np.array) -> np.array:
+def total_ret_index(shares: np.array, prices: np.array, idx_div: np.array,
+                    idx_vals: Optional[np.array] = None) -> np.array:
     """ Calculate index total returns
     :param shares: starting number of shares
     :param prices: individual stock prices (or returns indices
                     if the first variable gives initial weights)
     :param idx_div:  index divs in points
+    :param idx_vals: optional - can supply idx_vals to save calculation time
     :return: total return index, starting from 1
     """
 
-    idx_vals = index_vals(shares, prices)
-    idx_div_y = idx_div / idx_vals
+    # Calculate idx_vals if not supplied
+    if idx_vals is None:
+        idx_vals = index_vals(shares, prices)
+
+    # idx_div_y = idx_div / idx_vals
+    idx_div_y = np.zeros(idx_vals.shape)
+    idx_div_y[1:] = idx_div[1:] / idx_vals[:-1]
     idx_px_rets = idx_vals[1:] / idx_vals[:-1] - 1
     idx_tot_period_rets = idx_px_rets + idx_div_y[1:]
-    idx_tri = np.ones(idx_vals.shape)
+    idx_tri = np.ones(len(idx_vals))[:, None]
     idx_tri[1:, 0] = np.cumprod(idx_tot_period_rets + 1)
 
     return idx_tri

@@ -56,7 +56,47 @@ def load_sim_settings_from_file(file: str, randomize=False) -> dict:
     return input_dict
 
 
-def process_input_data(inputs: dict, return_override: float = None) -> dict:
+def process_input_data_from_pickle(inputs: dict, return_override: float = None) -> dict:
+    """ Process inputs into a format consistent with simulation
+        Adjust returns of individual stocks to match target index (price) return
+    """
+
+    tickers = list(inputs['d_px'].columns)
+    n_steps = len(inputs['d_px'].index)
+    params = inputs['params']
+
+    # Prices and changes - normalized to start from 1.0
+    d_px = inputs['d_px']
+    d_tri = inputs['d_tri']
+    w = inputs['w_idx']
+
+    px = (1 + d_px).cumprod()
+    tri = (1 + d_tri).cumprod()
+    div = d_tri - d_px
+
+    if inputs['mkt_data']['fixed_weights']:
+        idx_vals = (1 + (d_px * w).sum(axis=1)).cumprod()
+        idx_tri = (1 + (d_tri * w).sum(axis=1)).cumprod()
+        idx_div = (div * w).sum(axis=1)
+    else:
+        w_start = w.values[0, :]
+        idx_vals = im.index_vals(w_start, px.values)
+        idx_div = np.zeros(idx_vals.shape)
+        idx_div[1:] = (div.values[1:] * px.values[:-1]) @ w_start
+        idx_tri = im.total_ret_index(w_start, px.values, idx_div,
+                                     idx_vals=idx_vals)
+
+    # Pack results into an output structure
+    out_dict = {'tickers': tickers, 'px': px, 'd_px': d_px, 'tri': tri, 'd_tri': d_tri,
+                'div': div, 'w': w.values, 'idx_div': idx_div,
+                'idx_vals': idx_vals, 'idx_tri': idx_tri,
+                'dates': inputs['dates'], 'tax': config.tax,
+                'params': inputs['params'], 'trx_cost': config.trx_cost}
+
+    return out_dict
+
+
+def process_input_data_from_xl(inputs: dict, return_override: float = None) -> dict:
     """ Process inputs into a format consistent with simulation
         Adjust returns of individual stocks to match target index (price) return
     """
@@ -122,26 +162,6 @@ def process_input_data(inputs: dict, return_override: float = None) -> dict:
     return out_dict
 
 
-def init_portfolio(sim_data: dict) -> PortLots:
-    """ Initialize simulation portfolio, establish positions matching the index """
-    # TODO - re-write this as an alternative constructor (e.g. with multiple dispatch)
-
-    tickers = sim_data['tickers']
-    w_tgt = sim_data['w'][0, :]
-    cash = 0
-    t_date = sim_data['dates'][0]
-
-    # Initial purchase lots (for now ignore transactions costs)
-    lots = pd.DataFrame(tickers, columns=['Ticker'])
-    lots['Start Date'] = t_date
-    lots['Shares'] = w_tgt
-    lots['Basis per Share'] = 1
-
-    # Instantiate the portfolio
-    port = PortLots(tickers, w_tgt=w_tgt, cash=cash, lots=lots, t_date=t_date)
-    return port
-
-
 def init_sim_hist(port: PortLots) -> list:
     """ Initialize the structure to accumulate simulation results """
     # TODO - move this into PortLots class, and likewise other similar functions
@@ -186,9 +206,10 @@ def log_port_report(port: PortLots, t: int, lots: bool = True, log=True) -> None
 def port_divs_during_period(port: PortLots, t: int, sim_data: dict) -> None:
     """ Calculate portfolio divs received during the period (assume that all stocks are ex-div on the last day """
 
-    stock_divs = sim_data['div']
-    shares = port.df_stocks['shares']
-    port_divs = shares.values @ stock_divs.values[t, :]
+    stock_divs = sim_data['div'].values[t, :]
+    shares = port.df_stocks['shares'].values
+    prices = sim_data['px'].values[t - 1, :]
+    port_divs = (shares * prices) @ stock_divs
 
     return port_divs
 
@@ -237,9 +258,30 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
 
     df_stocks['trade'] = df_lots.groupby(by='ticker')['trade'].sum()
 
+    # Also sell stocks with w_actv > max_active_weight where we have long-term capital gains
+    if ('max_actv_wgt' in params) and (df_stocks['w_actv'] > params['max_actv_wgt']).any():
+        # Identify long-term lots for stocks where we have excess overweights
+        df_lots['for_cutting_pos'] = (df_lots['w_actv'] > params['max_actv_wgt']) \
+                                & (df_lots['long_term']) \
+                                & (~df_lots['stk_to_sell'])
+
+        if df_lots['for_cutting_pos'].sum() > 0:
+            df_lots['shrs_for_cutting'] = df_lots['shares'] * df_lots['for_cutting_pos']
+            df_stocks['shrs_for_cutting'] = df_lots.groupby(by='ticker')['shrs_for_cutting'].sum()
+
+            # Determine for each stock the number of shares we need to sell to get within the overweight band
+            df_stocks['out_actv_band%'] = np.maximum(df_stocks['w_actv'] - params['max_actv_wgt'], 0)
+            df_stocks['out_actv_band_shrs'] = df_stocks['out_actv_band%'] * port.port_value / df_stocks['price']
+            df_stocks['shrs_for_cut_w_cap'] = np.minimum(df_stocks['out_actv_band_shrs'], df_stocks['shrs_for_cutting'])
+
+            # Add to the trade list
+            df_stocks['to_sell'] = df_stocks['to_sell'] | (df_stocks['shrs_for_cut_w_cap'] > 0)
+            df_stocks['trade'] -= df_stocks['shrs_for_cut_w_cap']
+
     # Now calculate the buys to offset beta impact of harvest sales and re-invest excess cash
     # For now assume that beta of all stocks is 1
-    mv_harvest = -df_lots['trade'] @ df_lots['price']
+    # mv_harvest = -df_lots['trade'] @ df_lots['price']
+    mv_harvest = -df_stocks['trade'] @ df_stocks['price']
     tot_mv_to_buy = mv_harvest + port.cash - port.cash_w_tgt * port.port_value
 
     # Define priority of purchases, starting with underweight stocks
@@ -269,6 +311,8 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
     df_stocks.sort_index(inplace=True)
 
     # Pack output into a dictionary
+    # Note that the harvest field does not take into account the tax we paid on rebalancing trades
+    # that is taken from the port.rebal_sim() method
     res = {'opt_trades': df_stocks['trade'], 'potl_harvest': df_stocks['potl_harv_val'].sum(),
            'harvest': df_lots['tax'].sum()}
 
@@ -297,18 +341,27 @@ def update_donate(port: PortLots, donate_thresh: float, donate_pct: float) -> fl
 
 def gen_sim_report(sim_hist: list, sim_data: dict) -> pd.DataFrame:
     """ Print simulationr results """
-    rpt_cols = ['harvest', 'potl_hvst', 'ratio', 'donate', 'tracking', 'port_val', 'bmk_val']
+    rpt_cols = ['hvst_grs', 'hvst_net', 'hvst_potl', 'ratio_grs', 'ratio_net',
+                'donate', 'tracking', 'port_val', 'bmk_val']
     df_report = pd.DataFrame(np.nan, columns=rpt_cols, index=range(len(sim_hist)))
     df_report.index.name = 'step'
 
     for i in range(len(df_report)):
-        df_report.loc[i, 'harvest'] = sim_hist[i]['opt']['harvest'] - sim_hist[i]['clock_reset_tax']
-        df_report.loc[i, 'potl_hvst'] = sim_hist[i]['opt']['potl_harvest']
+        df_report.loc[i, 'hvst_grs'] = sim_hist[i]['opt']['harvest']
+        df_report.loc[i, 'hvst_net'] = -sim_hist[i]['rebal']['tax'] - sim_hist[i]['clock_reset_tax']
+        df_report.loc[i, 'hvst_potl'] = sim_hist[i]['opt']['potl_harvest']
         # df_report.loc[i, 'net buy'] = sim_hist[i]['rebal']['net_buy']
         df_report.loc[i, 'port_val'] = sim_hist[i]['opt']['port_val']
         df_report.loc[i, 'donate'] = sim_hist[i]['donate']
 
-    df_report['ratio'] = df_report['harvest'] / df_report['potl_hvst']
+    # Rescale as % of portfolio value
+    for col in ['hvst_grs', 'hvst_net', 'hvst_potl', 'donate']:
+        df_report[col] /= df_report['port_val']
+
+    # Compute ratios on an annual rolling basis for smoothness
+    freq = int(config.ANN_FACTOR / sim_data['params']['dt'])
+    df_report['ratio_grs'] = df_report['hvst_grs'].rolling(freq).sum() / df_report['hvst_potl'].rolling(freq).sum()
+    df_report['ratio_net'] = df_report['hvst_net'].rolling(freq).sum() / df_report['hvst_potl'].rolling(freq).sum()
     df_report['bmk_val'] = sim_data['idx_tri'] * df_report.loc[0, 'port_val']
     df_report['tracking'] = (df_report['port_val'] / df_report['bmk_val']).pct_change()
 
@@ -354,6 +407,7 @@ def pd_to_csv(df: Union[pd.DataFrame, pd.Series], file_code: str, suffix: str = 
 def run_sim(inputs: dict, suffix=None, randomize=False) -> tuple:
     # Load simulation parameters from file
     params = inputs['params']
+    n_steps = len(inputs['d_px']) - 1
 
     # Process simulation params
     if params['ret_override_flag']:
@@ -361,14 +415,20 @@ def run_sim(inputs: dict, suffix=None, randomize=False) -> tuple:
     else:
         return_override = None
 
-    sim_data = process_input_data(inputs, return_override=return_override)
+    if params['donate_pct'] <= 0:
+        params['donate'] = False
+
+    # Depending on prices source, process the data differntly
+    # later, it may be a good idea to merge these functions into one.
+    if inputs.get('prices_from_pickle', False):
+        sim_data = process_input_data_from_pickle(inputs, return_override=return_override)
+    else:
+        sim_data = process_input_data_from_xl(inputs, return_override=return_override)
 
     # Set up the initial portfolio matching t
     # he index at t=0
-    port = init_portfolio(sim_data)
+    port = PortLots.init_portfolio_from_dict(sim_data)
     port.update_sim_data(sim_data=sim_data, t=0)
-    # TODO rather than writing a new method, consider using multiple dispath to use port.rabalance
-    #    with a different argument type (polymorphism)
 
     log_port_report(port, 0)
 
@@ -378,7 +438,7 @@ def run_sim(inputs: dict, suffix=None, randomize=False) -> tuple:
 
     # Initialize the structure to keep simulation info
     sim_hist = init_sim_hist(port)
-    for t in range(1, len(sim_data['px'])):
+    for t in range(1, n_steps + 1):
         # Take account of the dividends that we have received during the period
         # Assume that all divs during the period happen on the last day (i.e. stocks are ex-div)
         # print(f"Step = {t}")
@@ -427,29 +487,34 @@ def run_sim(inputs: dict, suffix=None, randomize=False) -> tuple:
     pd_to_csv(df_trades, "trades", suffix=suffix)
 
     # Print total statistics
-    harvest = (df_report['harvest'] / df_report['port_val']).sum()
-    potl_harvest = (df_report['potl_hvst'] / df_report['port_val']).sum()
+    hvst_grs = df_report['hvst_grs'].sum()
+    hvst_net = df_report['hvst_net'].sum()
+    hvst_potl = df_report['hvst_potl'].sum()
     # TODO - think of a more sensible measure of harvest / pot'l harvest, like an IRR or PME
     #     or at least scale it by portfolio value and represent in bp
 
-    hvst_ratio = harvest / potl_harvest
+    ratio_grs = hvst_grs / hvst_potl
+    ratio_net = hvst_net / hvst_potl
     freq = config.ANN_FACTOR / params['dt']
-    years = (len(df_report) - 1) / freq
+    years = n_steps / freq
     tracking_std = df_report['tracking'].dropna().std()
-    hvst_2_trk_ann = (harvest / years) / (tracking_std * np.sqrt(freq))
-    idx_ann_ret = (df_report.iloc[-1]['bmk_val'] / df_report.iloc[0]['bmk_val']) ** (1 / years) - 1
-    port_ann_ret = (df_report.iloc[-1]['port_val'] / df_report.iloc[0]['port_val']) ** (1 / years) - 1
+    hvst_n_2_trk_ann = (hvst_net / years) / (tracking_std * np.sqrt(freq))
+    idx_ann_ret = ((df_report.iloc[-1]['bmk_val'] / df_report.iloc[0]['bmk_val']) ** (1 / n_steps) - 1) * freq
+    port_ann_ret = ((df_report.iloc[-1]['port_val'] / df_report.iloc[0]['port_val']) ** (1 / n_steps) - 1) * freq
     # tracking_cum = df_report.iloc[-1]['port_val'] / df_report.iloc[-1]['bmk_val'] - 1
 
     # Pack results into a datframe:
     sim_stats = pd.Series(dtype='float64')
     sim_stats['port_ret'] = port_ann_ret
     sim_stats['index_ret'] = idx_ann_ret
-    sim_stats['tracking std'] = tracking_std * np.sqrt(freq)
-    sim_stats['harvest'] = harvest / years
-    sim_stats['potl harvest'] = potl_harvest / years
-    sim_stats['hvst/potl_hvst'] = hvst_ratio
-    sim_stats['hvst/tracking'] = hvst_2_trk_ann
+    sim_stats['index_vol'] = df_report['bmk_val'].pct_change().std() * np.sqrt(freq)
+    sim_stats['tracking_std'] = tracking_std * np.sqrt(freq)
+    sim_stats['hvst_grs'] = hvst_grs / years
+    sim_stats['hvst_net'] = hvst_net / years
+    sim_stats['hvst_potl'] = hvst_potl / years
+    sim_stats['hvst_grs/potl'] = ratio_grs
+    sim_stats['hvst_net/potl'] = ratio_net
+    sim_stats['hvst_n/trckng'] = hvst_n_2_trk_ann
 
     logging.info("\nSimulation statistics (annualized):")
     logging.info(sim_stats.to_string())
@@ -476,9 +541,9 @@ if __name__ == "__main__":
     inputs = load_sim_settings_from_file(input_file, randomize=True)
     sim_stats, step_report = run_sim(inputs, suffix=timestamp)
 
-    print("\Trade Summary (x100):")
+    print("\nTrade Summary (x100, %):")
     print(df_to_format(step_report * 100, formats={'_dflt': '{:.2f}'}))
 
-    print("\nSimulation statistics:")
-    print(df_to_format(pd.DataFrame(sim_stats*100, columns=["annualized (%)"]), formats={'_dflt': '{:.2f}'}))
+    print("\nSimulation statistics (%):")
+    print(df_to_format(pd.DataFrame(sim_stats * 100, columns=["annualized (%)"]), formats={'_dflt': '{:.2f}'}))
     print("\nDone")

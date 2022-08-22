@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 #%% Format a dataframe for printing
-def df_to_format(df, formats = None, multipliers = None):
+def df_to_format(df, formats = None, multipliers = None) -> pd.DataFrame:
     """ Print dataframe to string, individual formats for each column
         Parameters:
             df - pandas dataframe
