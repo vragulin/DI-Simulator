@@ -48,10 +48,13 @@ def load_data(params: dict, data_dict: Optional[dict] = None, randomize=False) -
     :param randomize: if True, generate random paths
     """
     # Load market data
-    fixed_weight_flag = (params['benchmark_type'] == 'fixed_weights') #or fixed_shares
+    fixed_weight_flag = (params['benchmark_type'] == 'fixed_weights')  # the other setting is fixed_shares
+    vol_scaling = params.get('vol_scaling', 1.0)
+
     mdata = load_mkt_data(params['dt'], data_dict=data_dict,
                           replace=params['replace'], randomize=randomize,
                           return_override=params['ret_override'],
+                          vol_scaling=vol_scaling,
                           fixed_weights=fixed_weight_flag)
 
     params['n_steps'] = n_steps = len(mdata['d_px']) - 1
@@ -72,8 +75,9 @@ def load_data(params: dict, data_dict: Optional[dict] = None, randomize=False) -
     # Pack into a dictionary
     data_dict = {'w_idx': w_idx, 'div': div, 'd_px': d_px, 'px': px,
                  'd_tri': d_tri, 'dates': rebal_dates, 'params': params,
-                 'randomize': randomize, 'rng': params['rng'],
-                 'mkt_data': mdata, 'prices_from_pickle': True}
+                 'randomize': randomize, 'vol_mult': mdata['vol_mult'],
+                 'rng': params['rng'], 'mkt_data': mdata,
+                 'prices_from_pickle': True}
 
     return data_dict
 

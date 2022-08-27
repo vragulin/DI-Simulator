@@ -17,13 +17,16 @@ W_PICKLE = "idx_daily_w.pickle"
 
 def load_mkt_data(data_freq: int, data_dict: Optional[dict] = None, replace: bool = False,
                   randomize: bool = False, return_override: Optional[float] = None,
-                  fixed_weights: bool = True) -> dict:
+                  vol_scaling: float = 1.0, fixed_weights: bool = True) -> dict:
     """
     :param data_freq:  number of trading days between rebalance points
     :param data_dict:  parameter dictionary
     :param replace: if True, sample with replacement when randomly selecting historical returns
     :param randomize: generate price history by randomly selecting historical returns (by days)
     :param return_override: adjust simulated index return to be equal to a specific number
+    :param vol_scaling: rescale volatility of the series by a factor,
+
+            keep mean geometric return same or equal to override below
     :param fixed_weights: if True assume fixed index weights for the stocks, otherwise, assume equal shares
                             (and weights evolve in line with stock prices)
     :return: dict of arrays with simulated or historical prices, returns, weights
@@ -53,6 +56,9 @@ def load_mkt_data(data_freq: int, data_dict: Optional[dict] = None, replace: boo
         out_dict['d_tri'] = np.maximum(out_dict['d_tri'], out_dict['d_px'])
 
         out_dict['div'] = out_dict['d_tri'] - out_dict['d_px']
+
+        # Keep track of whether volatility has been rescaled
+        out_dict['vol_mult'] = 1.0
     else:
         out_dict = data_dict
 
@@ -72,10 +78,20 @@ def load_mkt_data(data_freq: int, data_dict: Optional[dict] = None, replace: boo
         d_px = out_dict['d_px'].iloc[:, full_indic].sample(frac=1, replace=replace).reset_index(drop=True)
     else:
         d_px = out_dict['d_px'].iloc[:, full_indic].reset_index(drop=True)
-
     d_px.iloc[0, :] = 0
+
+    # Set random weights
     rand_weights = np.exp(np.random.normal(size=(1, d_px.shape[1])))
     rand_weights /= np.sum(rand_weights)
+
+    # Rescale volatility of the series if needed
+    if 'vol_mult' not in out_dict:
+        out_dict['vol_mult'] = 1
+    elif vol_scaling != out_dict['vol_mult']:
+        # Row 0 of d_px is all zeros, so update everything from row 1
+        d_px.values[1:, :] = im.rescale_frame_vol(d_px.values[1:, :],
+                                                  vol_scaling / out_dict['vol_mult'])
+        out_dict['vol_mult'] = vol_scaling
 
     # Get returns approximately equal to override
     if return_override is not None:

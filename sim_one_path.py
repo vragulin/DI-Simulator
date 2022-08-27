@@ -280,6 +280,7 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
 
     # Now calculate the buys to offset beta impact of harvest sales and re-invest excess cash
     # For now assume that beta of all stocks is 1
+
     # mv_harvest = -df_lots['trade'] @ df_lots['price']
     mv_harvest = -df_stocks['trade'] @ df_stocks['price']
     tot_mv_to_buy = mv_harvest + port.cash - port.cash_w_tgt * port.port_value
@@ -388,13 +389,14 @@ def trade_history(sim_hist: list, sim_data: dict, shares_flag: bool = False) -> 
     return df_trades
 
 
-def pd_to_csv(df: Union[pd.DataFrame, pd.Series], file_code: str, suffix: str = None):
+def pd_to_csv(df: Union[pd.DataFrame, pd.Series], file_code: str, suffix: str = None,
+              dir_path: str = 'results/'):
     """ Write dataframe to a file, perform all checks """
 
     if suffix is not None:
-        fname = 'results/' + file_code + '_' + suffix + ".csv"
+        fname = dir_path + file_code + '_' + suffix + ".csv"
     else:
-        fname = 'results/' + file_code + ".csv"
+        fname = dir_path + file_code + ".csv"
 
     # Silently remove existing file with the same name
     with suppress(OSError):
@@ -404,7 +406,9 @@ def pd_to_csv(df: Union[pd.DataFrame, pd.Series], file_code: str, suffix: str = 
     df.to_csv(fname)
 
 
-def run_sim(inputs: dict, suffix=None, randomize=False) -> tuple:
+def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
+            verbose: bool = True, save_files: bool = True) -> tuple:
+
     # Load simulation parameters from file
     params = inputs['params']
     n_steps = len(inputs['d_px']) - 1
@@ -439,9 +443,12 @@ def run_sim(inputs: dict, suffix=None, randomize=False) -> tuple:
     # Initialize the structure to keep simulation info
     sim_hist = init_sim_hist(port)
     for t in range(1, n_steps + 1):
+
+        if verbose:
+            if t % 25 == 0: print(f"Step = {t}")
+
         # Take account of the dividends that we have received during the period
         # Assume that all divs during the period happen on the last day (i.e. stocks are ex-div)
-        # print(f"Step = {t}")
         port.cash += port_divs_during_period(port, t, sim_data)
 
         # Revalue portfolio
@@ -484,7 +491,8 @@ def run_sim(inputs: dict, suffix=None, randomize=False) -> tuple:
 
     # Generate and save trade history
     df_trades = trade_history(sim_hist, sim_data, shares_flag=False)
-    pd_to_csv(df_trades, "trades", suffix=suffix)
+    if save_files:
+        pd_to_csv(df_trades, "trades", suffix=suffix, dir_path=dir_path)
 
     # Print total statistics
     hvst_grs = df_report['hvst_grs'].sum()
@@ -518,7 +526,8 @@ def run_sim(inputs: dict, suffix=None, randomize=False) -> tuple:
 
     logging.info("\nSimulation statistics (annualized):")
     logging.info(sim_stats.to_string())
-    pd_to_csv(sim_stats, "stats", suffix=suffix)
+    if save_files:
+        pd_to_csv(sim_stats, "stats", suffix=suffix, dir_path=dir_path)
 
     return sim_stats, df_report
 

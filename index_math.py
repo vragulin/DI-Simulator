@@ -2,7 +2,7 @@
 Useful functions to calculate index returns, weights, etc...
 """
 import numpy as np
-from typing import Optional
+from typing import Optional, Union
 
 
 def index_avg_return(shares: np.array, prices: np.array) -> float:
@@ -90,3 +90,51 @@ def total_ret_index(shares: np.array, prices: np.array, idx_div: np.array,
     idx_tri[1:, 0] = np.cumprod(idx_tot_period_rets + 1)
 
     return idx_tri
+
+
+def rescale_ts_vol(d_px: np.array, vol_mult: float, new_g_mean: Optional[float] = None) -> np.array:
+    """ Rescale volatility for a time series of price percentage changes
+     :param d_px: series of price percent changes
+     :param vol_mult: multipler by which we want to increase the volatility
+     :param new_g_mean: target expected (geometric) return of the new series, if None keep it the same as the input
+     :return np.array: new series of re-scaled percent changes
+     """
+    n_steps = len(d_px)
+
+    if new_g_mean is None:
+        new_g_mean = (1 + d_px).prod() ** (1 / n_steps) - 1
+
+    # Scale up volatity (vol0 ** vol_mult is the same as multiplying log_vol0 by vol_mult).
+    s1 = (1 + d_px) ** vol_mult
+
+    # Adjust the growth rate to get the same cumulative return
+    g_mean1 = s1.prod() ** (1 / n_steps) - 1
+    adj_factor = (1 + new_g_mean) / (1 + g_mean1)
+
+    return (s1 * adj_factor) - 1
+
+
+def rescale_frame_vol(d_px: np.array, vol_mult: float,
+                      new_g_mean: Optional[Union[np.array, float]] = None) -> np.array:
+    """ Rescale volatility for a dataframe
+    :param d_px: 2-d array of price changes, axis 0 is time,a axis1 is securities
+    :param vol_mult: multipler by which we want to increase the volatility
+    :param new_g_mean: target expected (geometric) return of the new series,
+        can be float or array same size as axis1
+        if None keep it the same as the input
+    :return np.array: new series of re-scaled percent changes
+    """
+
+    n_steps, n_stocks = d_px.shape
+
+    if new_g_mean is None:
+        new_g_mean = (1 + d_px).prod(axis=0) ** (1 / n_steps) - 1
+
+    # Scale up volatity (vol0 ** vol_mult is the same as multiplying log_vol0 by vol_mult).
+    s1 = (1 + d_px) ** vol_mult
+
+    # Adjust the growth rate to get the same cumulative return
+    g_mean1 = s1.prod(axis=0) ** (1 / n_steps) - 1
+    adj_factor = (1 + new_g_mean) / (1 + g_mean1)
+
+    return (s1 * adj_factor) - 1

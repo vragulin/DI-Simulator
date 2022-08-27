@@ -70,7 +70,7 @@ if __name__ == "__main__":
     with suppress(OSError):
         os.remove(log_file)
 
-    logging.basicConfig(level=logging.INFO, filename=log_file,
+    logging.basicConfig(level=logging.ERROR, filename=log_file,
                         format='%(message)s')
 
     # Load input parameters and set up accumulator structures
