@@ -2,21 +2,19 @@
     Run a batch of multi-path simuations.
     by V. Ragulin, started 23-Aug-2022
 """
-import datetime as dt
 import logging
 import os
 import time
 from contextlib import suppress
+from itertools import product
 from typing import Optional
 import pandas as pd
-from itertools import product
-
 pd.options.display.float_format = '{:,.4f}'.format
 
 from pretty_print import df_to_format
 import sim_one_path as sop
 import sim_one_path_mdata as sopm
-import sim_multi_path_mdata as smpm
+import sim_multi_path as smp
 
 
 def init_batch() -> pd.DataFrame:
@@ -24,13 +22,19 @@ def init_batch() -> pd.DataFrame:
     :return: dataframe with param settings for each run
     """
 
-    columns = ['dt', 'donate', 'ret_override', 'vol_scaling']
-    dt = [60, 20, 5]
+    # Define scnarios
+    columns = ['dt', 'donate', 'ret_override', 'vol_scaling',
+               'final_liquidation', 'max_harvest']
+
+    dt = [20]  # [60, 20, 5]
     donate = [0, 0.05, 0.1]
     vol = [0.5, 1.0, 1.5]
-    ret = [0, 0.02, 0.05, 0.1]
+    ret = [0.05, 0.1]
+    fin_liq = [0, 1]
+    max_hvst = [0.3, 0.6]
 
-    batch_data = list(product(dt, donate, ret, vol))
+    # Pack scenarios into a dataframe
+    batch_data = list(product(dt, donate, ret, vol, fin_liq, max_hvst))
     df_sim = pd.DataFrame(batch_data, columns=columns).astype({'dt': int})
     df_sim.index.name = 'run_id'
     return df_sim
@@ -74,9 +78,6 @@ def run_one_param_set(params: dict, n_paths: int = 1, name: Optional[str] = None
         print(f"Simulation {name} already processed.")
         return -1
 
-    # If we have not saved data for this simualtion already, run it now
-    data_dict = sopm.load_data(params, randomize=params['randomize'])
-
     logging.info('Inputs:\n' + str(params) + '\n')
     path_stats = []
 
@@ -85,12 +86,14 @@ def run_one_param_set(params: dict, n_paths: int = 1, name: Optional[str] = None
     for i in range(n_paths):
         print(f"Path #{i + 1}")
         logging.info(f"\nPath #{i + 1}:")
+
+        # Generate simulation data
+        data_dict = sopm.load_data(params, randomize=params['randomize'])
+
+        # Run simulation and store results
         one_path_summary, one_path_steps = sop.run_sim(data_dict, suffix=sim_name,
                                                        dir_path=dir_path, save_files=False)
         path_stats.append((one_path_summary, one_path_steps))
-
-        if i < n_paths - 1:  # if it's not the last iteration - update data
-            data_dict = sopm.load_data(params, data_dict=data_dict, randomize=params['randomize'])
 
     toc = time.perf_counter()  # Timer end
 
@@ -99,7 +102,7 @@ def run_one_param_set(params: dict, n_paths: int = 1, name: Optional[str] = None
     t_path = t_total / n_paths
     print(f'Simulation took {t_total:0.4f} sec., {t_path:0.4f} sec. per path.\n')
 
-    sim_summary, sim_stats, steps_report = smpm.process_path_stats(path_stats)
+    sim_summary, sim_stats, steps_report = smp.process_path_stats(path_stats)
 
     print("\nSimulation results by path (annualized, %):")
     print(df_to_format(sim_stats * 100, formats={'_dflt': '{:.2f}'}))
@@ -127,7 +130,7 @@ def run_one_param_set(params: dict, n_paths: int = 1, name: Optional[str] = None
 if __name__ == "__main__":
     # Set up logging
     # timestamp = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
-    batch_name = 'prod10_thresh0'
+    batch_name = 'prod10_month'
     dir_path = 'results/batch/'
     log_file = dir_path + 'sim_' + batch_name + '.log'
 
@@ -147,7 +150,7 @@ if __name__ == "__main__":
 
     for idx, overrides in sim_batch.iterrows():
 
-        if True: #int(idx) > 53:
+        if True:  # int(idx) in [48]:
             params = gen_sim_params(base_params, overrides)
 
             print(f"Running simulation: {idx}")
@@ -157,6 +160,6 @@ if __name__ == "__main__":
             # Run simulation for a single parameter set
             sim_name = f"{batch_name}_{idx}"
             run_one_param_set(params, n_paths=n_paths, name=sim_name,
-                              overwrite=True, dir_path=dir_path)
+                              overwrite=False, dir_path=dir_path)
 
     print("\nDone")

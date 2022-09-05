@@ -41,28 +41,32 @@ def load_params(file: str) -> dict:
     return params
 
 
-def load_data(params: dict, data_dict: Optional[dict] = None, randomize=False) -> dict:
+def load_data(params: dict, randomize=False) -> dict:
     """ Load simulation settings from an excel file
     :param params: dictionary with global simulation settings (i.e. not specific to path
-    :param data_dict:  output of this function from the previous iteration, or empty if it's the first iteration.
     :param randomize: if True, generate random paths
     """
     # Load market data
     fixed_weight_flag = (params['benchmark_type'] == 'fixed_weights')  # the other setting is fixed_shares
     vol_scaling = params.get('vol_scaling', 1.0)
 
-    mdata = load_mkt_data(params['dt'], data_dict=data_dict,
-                          replace=params['replace'], randomize=randomize,
-                          return_override=params['ret_override'],
-                          vol_scaling=vol_scaling,
+    mdata = load_mkt_data(params['dt'], replace=params['replace'], randomize=randomize,
+                          return_override=params['ret_override'], vol_scaling=vol_scaling,
                           fixed_weights=fixed_weight_flag)
 
     params['n_steps'] = n_steps = len(mdata['d_px']) - 1
 
     # Array of rebalance dates (so that we finish arond today)
-    # Use simulated values for simplicity sine we are randomizing anyway.
-    rebal_dates = sorted([config.t_last + du.relativedelta(months=-3 * x)
-                          for x in range(n_steps + 1)])
+    # Use simulated values for simplicity since we are randomizing anyway.
+    if params['dt'] in [20, 60]:
+        month_gap = int(params['dt']/20)
+        rebal_dates = sorted([config.t_last + du.relativedelta(months=-month_gap * x)
+                              for x in range(n_steps + 1)])
+    elif params['dt'] == 5:
+        rebal_dates = sorted([config.t_last + du.relativedelta(weeks=-x)
+                              for x in range(n_steps + 1)])
+    else:
+        raise ValueError(f"Rebalance freq dt={params['dt']} not implemented.")
 
     # Pack data into pandas dataframes
     tickers = mdata['d_px'].columns

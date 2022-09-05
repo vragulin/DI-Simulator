@@ -370,8 +370,8 @@ class PortLots:
             "Trades and Positions series indices are not the same."
 
         # Check if the rebalance is valid
-        if (-trades > self.df_stocks['max_sell'] + np.finfo(float).eps).any():  # Check within computational tolerance
-            print("Some trades exceeds max_sell.")
+        if (-trades > self.df_stocks['max_sell'] + np.finfo(float).eps * 1e4).any():  # Check within computational tolerance
+            print("Some trades exceed max_sell.")
         # assert (-trades <= self.df_stocks['max_sell']).all(), \
         #     "Some trades exceeds max_sell."
 
@@ -433,7 +433,7 @@ class PortLots:
 
         return data_dict
 
-    def reset_clock(self, reset_thresh: float = 0):
+    def reset_clock(self, reset_thresh: float = 0) -> float:
         """ Sell and buy-back long-term positions so that they can be used again
             for harvesting losses.  Assume that market data has been updated and
             the portfolio has been marked to market.
@@ -456,4 +456,17 @@ class PortLots:
         reset_tax = np.sum(df_lots['reset_indic'] * df_lots['tax per shr'] * df_lots['shares'])
         return reset_tax
 
+
+    def liquid_tax(self, liq_pct: float = 1.0) -> float:
+        """ Taxes incurred when selling fraction of the portfolio
+            Assumes portfolio has been updated for the new market data
+            And lots have been processed (i.e. calc tax_per_share)
+        """
+
+        assert liq_pct >= 0, f"Liquidation percentage should be positive, {liq_pct} given."
+
+        df_lots = self.df_lots
+        tax = df_lots['shares'] @ df_lots['tax per shr']
+
+        return tax * liq_pct
 

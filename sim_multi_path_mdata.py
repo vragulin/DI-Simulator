@@ -17,45 +17,7 @@ pd.options.display.float_format = '{:,.4f}'.format
 from pretty_print import df_to_format
 import sim_one_path as sop
 import sim_one_path_mdata as sopm
-
-
-def process_path_stats(path_stats: list) -> tuple:
-    """ Compute average values across a list of simulation results 
-        Each simulation result is a series
-    """
-
-    n_paths = len(path_stats)
-
-    # Calculate statistics across the entire simulation period
-    sim_stats = pd.DataFrame(0, index=path_stats[0][0].index, columns=range(1, n_paths + 1))
-    for i, res in enumerate(path_stats):
-        sim_stats[i + 1] = res[0]
-
-    cols = ['Avg', 'Std', 'Max', 'Min']
-    funcs = [np.mean, np.std, np.max, np.min]
-    sim_summary = pd.DataFrame(0, index=sim_stats.index, columns=cols)
-
-    for col, func in zip(cols, funcs):
-        sim_summary[col] = func(sim_stats, axis=1)
-
-    # Calculate statistics for each period (to track average dynamics of harvesting over time)
-    step_rpt = pd.DataFrame(0, index=path_stats[0][1].index, columns=path_stats[0][1].columns)
-    step_rpt.drop(columns='tracking', inplace=True)  # Don't need to average tracking since it's meaningless
-    cols = ['hvst_grs', 'hvst_net', 'hvst_potl', 'donate', 'port_val', 'bmk_val']
-
-    for res in path_stats:
-        one_path_rpt = res[1].fillna(0)
-        step_rpt[cols] += one_path_rpt[cols] / n_paths
-
-    step_rpt['ratio_grs'] = step_rpt['hvst_grs'] / step_rpt['hvst_potl']
-    step_rpt['ratio_net'] = step_rpt['hvst_net'] / step_rpt['hvst_potl']
-
-    # # Show harvest and potl_harvest as % of portfolio value
-    # for col in ['harvest', 'potl_hvst', 'donate']:
-    #     step_rpt[col] /= step_rpt['port_val']
-
-    return sim_summary, sim_stats, step_rpt
-
+from sim_multi_path import process_path_stats
 
 # ***********************************************************
 # Entry point
@@ -79,7 +41,7 @@ if __name__ == "__main__":
     data_dict = sopm.load_data(params, randomize=params['randomize'])
 
     logging.info('Inputs:\n' + str(params) + '\n')
-    n_paths = 10
+    n_paths = 5
     path_stats = []
 
     # Run simulation
@@ -91,7 +53,7 @@ if __name__ == "__main__":
         path_stats.append((one_path_summary, one_path_steps))
 
         if i < n_paths - 1:  # if it's not the last iteration - update data
-            data_dict = sopm.load_data(params, data_dict=data_dict, randomize=params['randomize'])
+            data_dict = sopm.load_data(params, randomize=params['randomize'])
 
     toc = time.perf_counter()  # Timer end
 

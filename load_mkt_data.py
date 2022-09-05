@@ -15,12 +15,10 @@ TR_PICKLE = "idx_t_rets.pickle"
 W_PICKLE = "idx_daily_w.pickle"
 
 
-def load_mkt_data(data_freq: int, data_dict: Optional[dict] = None, replace: bool = False,
-                  randomize: bool = False, return_override: Optional[float] = None,
-                  vol_scaling: float = 1.0, fixed_weights: bool = True) -> dict:
+def load_mkt_data(data_freq: int, replace: bool = False, randomize: bool = False,
+                  return_override: Optional[float] = None, vol_scaling: float = 1.0, fixed_weights: bool = True) -> dict:
     """
     :param data_freq:  number of trading days between rebalance points
-    :param data_dict:  parameter dictionary
     :param replace: if True, sample with replacement when randomly selecting historical returns
     :param randomize: generate price history by randomly selecting historical returns (by days)
     :param return_override: adjust simulated index return to be equal to a specific number
@@ -29,38 +27,35 @@ def load_mkt_data(data_freq: int, data_dict: Optional[dict] = None, replace: boo
             keep mean geometric return same or equal to override below
     :param fixed_weights: if True assume fixed index weights for the stocks, otherwise, assume equal shares
                             (and weights evolve in line with stock prices)
-    :return: dict of arrays with simulated or historical prices, returns, weights
+    :return: dict of arrays with simulated or historical prices, returns, weights to be used for analysis
     """
 
-    if data_dict is None:
-        px = pd.read_pickle(os.path.join(working_dir, PX_PICKLE)).fillna(method='ffill').fillna(0)
-        px.index = range(0, len(px.index))
-        px = px.reindex(index=range(0, len(px.index), data_freq))
+    px = pd.read_pickle(os.path.join(working_dir, PX_PICKLE)).fillna(method='ffill').fillna(0)
+    px.index = range(0, len(px.index))
+    px = px.reindex(index=range(0, len(px.index), data_freq))
 
-        tri = pd.read_pickle(os.path.join(working_dir, TR_PICKLE)).fillna(method='ffill').fillna(0)
-        tri.index = range(0, len(tri.index))
-        tri = tri.reindex(index=range(0, len(tri.index), data_freq))
+    tri = pd.read_pickle(os.path.join(working_dir, TR_PICKLE)).fillna(method='ffill').fillna(0)
+    tri.index = range(0, len(tri.index))
+    tri = tri.reindex(index=range(0, len(tri.index), data_freq))
 
-        w = pd.read_pickle(os.path.join(working_dir, W_PICKLE)).fillna(0)
-        w.index = range(0, len(w.index))
-        w = np.maximum(0, w.reindex(index=range(0, len(w.index), data_freq)))
-        w /= (np.sum(w.to_numpy(), axis=1)[:, None] @ np.ones((1, len(w.columns))))
+    w = pd.read_pickle(os.path.join(working_dir, W_PICKLE)).fillna(0)
+    w.index = range(0, len(w.index))
+    w = np.maximum(0, w.reindex(index=range(0, len(w.index), data_freq)))
+    w /= (np.sum(w.to_numpy(), axis=1)[:, None] @ np.ones((1, len(w.columns))))
 
-        out_dict = {'px': px, 'tri': tri, 'w': w}
+    out_dict = {'px': px, 'tri': tri, 'w': w}
 
-        # Build returns
-        out_dict['d_px'] = out_dict['px'].pct_change().fillna(0).replace(np.inf, 0)
-        out_dict['d_tri'] = out_dict['tri'].pct_change().fillna(0).replace(np.inf, 0)
+    # Build returns
+    out_dict['d_px'] = out_dict['px'].pct_change().fillna(0).replace(np.inf, 0)
+    out_dict['d_tri'] = out_dict['tri'].pct_change().fillna(0).replace(np.inf, 0)
 
-        # Check that we don't have negative dividends, this can happen if we have bad input data
-        out_dict['d_tri'] = np.maximum(out_dict['d_tri'], out_dict['d_px'])
+    # Check that we don't have negative dividends, this can happen if we have bad input data
+    out_dict['d_tri'] = np.maximum(out_dict['d_tri'], out_dict['d_px'])
 
-        out_dict['div'] = out_dict['d_tri'] - out_dict['d_px']
+    out_dict['div'] = out_dict['d_tri'] - out_dict['d_px']
 
-        # Keep track of whether volatility has been rescaled
-        out_dict['vol_mult'] = 1.0
-    else:
-        out_dict = data_dict
+    # Keep track of whether volatility has been rescaled
+    out_dict['vol_mult'] = 1.0
 
     # Only use series with good data
     px = out_dict['px']
@@ -130,6 +125,9 @@ def load_mkt_data(data_freq: int, data_dict: Optional[dict] = None, replace: boo
 
     # Capture other settings
     out_dict['fixed_weights'] = fixed_weights
+
+    if config.DEBUG_MODE:
+        print(f"Load mkt data called. array_shape = {out_dict['d_px'].shape}")
 
     return out_dict
 

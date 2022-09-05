@@ -29,8 +29,8 @@ def process_sim_file(idx: int, dir_path: str, batch_name: str) -> Optional[pd.Se
 if __name__ == "__main__":
 
     # Directory paths and file formats
-    dir_path = 'results/batch_thresh_0.02/'
-    batch_name = 'prod10'
+    dir_path = 'results/batch/'
+    batch_name = 'prod10_month'
 
     # Read simulation settings file
     f_batch = os.path.join(dir_path,
@@ -39,10 +39,11 @@ if __name__ == "__main__":
     b_params = pd.read_csv(f_batch, index_col='run_id')
 
     # Process individual sim files, save results into a dataframe
-    cols = ['port_ret', 'index_ret', 'index_vol',
-            'tracking_std', 'hvst_grs', 'hvst_net',
-            'hvst_potl', 'hvst_grs/potl',
-            'hvst_net/potl', 'hvst_n/trckng']
+    cols = ['idx_irr', 'port_irr', 'tax_alpha', 'tax_sr',
+            'port_pretax_ret', 'index_pretax_ret', 'index_vol',
+            'tracking_std', 'hvst_grs', 'hvst_net', 'hvst_potl',
+            'hvst_grs/potl', 'hvst_net/potl', 'hvst_n/trckng',
+            'idx_liq_tax%', 'port_liq_tax%']
 
     b_res = pd.DataFrame(np.nan, columns=cols, index=b_params.index)
     for idx in b_params.index:

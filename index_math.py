@@ -3,8 +3,11 @@ Useful functions to calculate index returns, weights, etc...
 """
 import numpy as np
 from typing import Optional, Union
+from scipy.optimize import minimize
+from numba import njit
 
 
+#@njit
 def index_avg_return(shares: np.array, prices: np.array) -> float:
     """ Calculate average simple period return for an index
         This function assumes a static index with no rebalancing and fixed
@@ -28,6 +31,7 @@ def index_avg_return(shares: np.array, prices: np.array) -> float:
     return avg_period_idx_ret
 
 
+#@njit
 def index_weights_over_time(shares: np.array, prices: np.array) -> np.array:
     """ Calculate index weights over time for a static index w/o rebalancing
         Axis 0 is time, axis 1 - stocks.
@@ -48,6 +52,7 @@ def index_weights_over_time(shares: np.array, prices: np.array) -> np.array:
     return stock_vals / idx_vals.reshape(stock_vals.shape[0], -1)
 
 
+#@njit
 def index_vals(shares: np.array, prices: np.array, norm=False) -> np.array:
     """ Calculate index weights over time for a static index w/o rebalancing
         Axis 0 is time, axis 1 - stocks.
@@ -66,6 +71,7 @@ def index_vals(shares: np.array, prices: np.array, norm=False) -> np.array:
         return idx_vals
 
 
+#@njit
 def total_ret_index(shares: np.array, prices: np.array, idx_div: np.array,
                     idx_vals: Optional[np.array] = None) -> np.array:
     """ Calculate index total returns
@@ -92,6 +98,7 @@ def total_ret_index(shares: np.array, prices: np.array, idx_div: np.array,
     return idx_tri
 
 
+@njit
 def rescale_ts_vol(d_px: np.array, vol_mult: float, new_g_mean: Optional[float] = None) -> np.array:
     """ Rescale volatility for a time series of price percentage changes
      :param d_px: series of price percent changes
@@ -114,6 +121,7 @@ def rescale_ts_vol(d_px: np.array, vol_mult: float, new_g_mean: Optional[float] 
     return (s1 * adj_factor) - 1
 
 
+#@njit
 def rescale_frame_vol(d_px: np.array, vol_mult: float,
                       new_g_mean: Optional[Union[np.array, float]] = None) -> np.array:
     """ Rescale volatility for a dataframe
@@ -138,3 +146,70 @@ def rescale_frame_vol(d_px: np.array, vol_mult: float,
     adj_factor = (1 + new_g_mean) / (1 + g_mean1)
 
     return (s1 * adj_factor) - 1
+
+
+#@njit
+def irr_obj(r: float, cf: np.array, dt: int,
+            ann_factor: float = 252) -> float:
+    t = np.linspace(start=0, stop=dt * len(cf), num=len(cf), endpoint=False) / ann_factor
+    pv = float(np.sum(cf * np.exp(-r * t)))
+    return abs(pv)
+
+
+#@njit
+def irr_solve(cf: np.array, dt: int, ann_factor: float = 252, guess: float = 0.09, bounds: tuple = (0.0, 0.2)):
+    """ Calculate IRR of an array of cash flows
+    :param cf: array of cash flows
+    :param dt: length of each step
+    :param ann_factor: number of trading days per annum
+    :param guess: intiial guess for r
+    :param bounds: bounds tuple (lb, up)
+    :return: exponential IRR
+    """
+    x0 = np.asarray(guess)
+    r = minimize(irr_obj, x0, args=(cf, dt, ann_factor), bounds=[bounds]).x
+
+    return r
+
+
+@njit
+def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: np.array,
+                  dt: int, ann_factor: float = 252,
+                  tax_lt: float = 0.28, tax_st: float = 0.5) -> float:
+    """ Calculate tax liability for liquidating an index portfolio at the end
+    Assume index is based on a fixed basket, so can be treated as single security.
+    :param idx_vals:    series of index values (no re-investment of divs)
+    :param idx_divs:    serues if ubdex dividends
+    :param idx_tri:     include re-invesstment of divs
+    :param dt:          length of a time step in trading days
+    :param ann_factor:  number of trading days per annum
+    :param tax_lt:      long-term gains tax rate
+    :param tax_st:      short-term gains tax rate
+    :return:  tax paid on full liquidation of the index at maturity
+    """
+    # Treat the index as a single security.  Assume that at each
+    # rebalance date we open a new lot (initial purchase + div reinvestment)
+
+    # Flatten input arrays so that we can handle both column and row vectors
+    i_val = idx_val.ravel()
+    i_div = idx_div.ravel()
+    i_tri = idx_tri.ravel()
+
+    # Calculate size of lots for 'reinvesting dividends'
+    n_points = len(i_val)
+    lot_basis = i_val.copy()
+    lot_basis[1:] = i_div[1:] * i_tri[:-1] / i_val[:-1]
+
+    # Capital gain on each lot
+    gain_prc = i_val[-1] / i_val - 1
+    gain = lot_basis * gain_prc
+
+    # Applicable tax rates
+    lot_dates = np.arange(n_points) * dt
+    lt_indic = (lot_dates[-1] - lot_dates) >= ann_factor
+    tax_rates = tax_st + lt_indic * (tax_lt - tax_st)
+
+    # Sum tax liability across all lots (pos umber = we pay tax)
+    tax = tax_rates @ gain
+
+    return tax

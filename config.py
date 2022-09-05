@@ -6,6 +6,7 @@ import numpy as np
 
 # Annualization factor
 ANN_FACTOR = 240
+DEBUG_MODE = True
 
 # Position tolerance
 tol = 1e-10
