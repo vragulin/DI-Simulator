@@ -4,7 +4,7 @@ Testing random market data generation
 import inspect
 import re
 import numpy as np
-
+import os
 import pytest as pt
 
 from load_mkt_data import load_mkt_data
@@ -21,98 +21,80 @@ def varname(p):
 @pt.fixture
 def inputs():
     # Build inputs
-    inputs = {'dt': 60,
-              'tau_div_start': 0.0,
-              'tau_div_end': 0.0,
-              'tau_st_start': 0.0,
-              'tau_st_end': 0.0,
-              'tau_lt_start': 0.0,
-              'tau_lt_end': 0.0,
-              'donate_start_pct': 0.00,
-              'donate_end_pct': 0.00,
-              'div_reinvest': False,
-              'div_payout': True,
-              'div_override': 0.00,
-              'harvest': 'none',
-              'harvest_thresh': -0.02,
-              'harvest_freq': 60,
-              'clock_reset': False,
-              'rebal_freq': 60,
-              'donate_freq': 240,
-              'donate_thresh': 0.0,
-              'terminal_donation': 0,
-              'donate': False,
-              'replace': False,
-              'randomize': False,
-              # 'randomize': True,
-              'return_override': -1,
-              'N_sim': 1,
-              'savings_reinvest_rate': -1,
-              'loss_offset_pct': 1,
-              }
-    return inputs
+    working_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp/"
+    PX_PICKLE = "idx_prices.pickle"
+    TR_PICKLE = "idx_t_rets.pickle"
+    W_PICKLE = "idx_daily_w.pickle"
+
+    data_files = {
+        'px': os.path.join(working_dir, PX_PICKLE),
+        'tri': os.path.join(working_dir, TR_PICKLE),
+        'w': os.path.join(working_dir, W_PICKLE)
+    }
+
+    dt = 60
+
+    filter_params = {
+        'max': 100,
+        'min': 0.001
+    }
+
+    return data_files, dt, filter_params
 
 
-def test_non_random_correct_sizes(inputs):
+def test_correct_sizes_no_filter(inputs):
+    data_files, dt, filter_params = inputs
+
     # Test without randomization
-    data_dict = load_mkt_data(inputs['dt'], replace=inputs['replace'], randomize=inputs['randomize'],
-                              return_override=inputs['return_override'])
+    data_dict = load_mkt_data(data_files, dt)
 
-    assert data_dict['px'].shape == (124, 1172)
-    assert data_dict['tri'].shape == (124, 1172)
-
-
-def test_random_correct_sizes(inputs):
-    data_dict = load_mkt_data(inputs['dt'], replace=inputs['replace'], randomize=True,
-                              return_override=inputs['return_override'])
-
-    assert data_dict['d_px'].shape == (124, 548)
-    assert data_dict['div'].shape == (124, 548)
+    assert data_dict['px'].shape == (124, 548)
+    assert data_dict['tri'].shape == (124, 548)
 
 
-def test_random_ret_override_match_target(inputs):
-    return_override = 0.01
-    data_dict = load_mkt_data(inputs['dt'], replace=inputs['replace'], randomize=True, return_override=return_override)
+def test_correct_size_filter(inputs):
+    data_files, dt, filter_params = inputs
 
-    w = data_dict['w']
-    px = data_dict['px']
-    d_px = data_dict['d_px']
-    div = data_dict['div']
-    d_tri = data_dict['d_tri']
+    # Test without randomization
+    data_dict = load_mkt_data(data_files, dt, filter_params=filter_params)
 
-    data_freq = inputs['dt']
-
-    idx_ret = (240 / data_freq) * (np.sum(w[0, :] * \
-        np.product(1 + d_px.to_numpy()[1:, :], axis=0)) ** \
-        (1 / (d_px.shape[0])) - 1)
-
-    assert pt.approx(idx_ret, abs=1e-3) == return_override
+    assert data_dict['px'].shape == (124, 494)
+    assert data_dict['tri'].shape == (124, 494)
+    assert data_dict['w'].shape == (124, 494)
 
 
-def test_random_ret_fixed_weights(inputs):
-        data_dict = load_mkt_data(inputs['dt'], replace=inputs['replace'], randomize=True)
-        w = data_dict['w']
-        assert w.shape == (124, 548)
-        np.testing.assert_equal(w[0, :], w[1, :])
-        assert pt.approx(w[0, :].sum(), 1e-10) == 1
+def test_fixed_weights(inputs):
+    data_files, dt, filter_params = inputs
+
+    # Test without randomization
+    data_dict = load_mkt_data(data_files, dt, filter_params=filter_params,
+                              fixed_weights=True)
+    w = data_dict['w'].values
+    assert w.shape == (124, 494)
+    np.testing.assert_equal(w[0, :], w[1, :])
+    assert pt.approx(w[0, :].sum(), 1e-10) == 1
 
 
-def test_random_ret_fixed_shares_raises_val_error(inputs):
-    try:
-        data_dict = load_mkt_data(inputs['dt'], replace=inputs['replace'], randomize=True, fixed_weights=False)
-        assert False
-    except ValueError:
-        assert True
+def test_rand_weights_set_rand_seed(inputs):
+    data_files, dt, filter_params = inputs
+    rand_seed = 7
 
+    # Test without randomization
+    data_dict = load_mkt_data(data_files, dt, filter_params=filter_params,
+                              rand_seed=rand_seed)
 
-def test_random_correct_stdev(inputs):
-    return_override = 0.10
+    assert data_dict['px'].shape == (124, 494)
+    assert data_dict['tri'].shape == (124, 494)
+    assert data_dict['w'].shape == (124, 494)
 
-    data_dict = load_mkt_data(inputs['dt'], replace=inputs['replace'], randomize=True, return_override=return_override)
+    w = data_dict['w'].values
+    assert pt.approx(w[0, :].sum(), 1e-10) == 1
 
-    # Calculate average standard deviation of stocks in the sample
-    avg_std = data_dict['d_px'].std()
-    data_freq = inputs['dt']
-    avg_std_ann = avg_std * np.sqrt(240/data_freq)
+    exp_3w_0 = np.array([0.007366,  0.000853,  0.001404])
+    np.testing.assert_array_almost_equal(w[0, :3], exp_3w_0, decimal=6)
 
-    assert pt.approx(avg_std_ann.mean(), abs=1e-2) == 0.367
+    d_px = data_dict['d_px'].values
+    w1 = w[0, :] * (1 + d_px[1, :])
+    w1 /= w1.sum()
+    np.testing.assert_array_almost_equal(w[1, :3], w1[:3], decimal=6)
+

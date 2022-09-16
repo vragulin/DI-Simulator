@@ -177,7 +177,7 @@ def test_rescale_frame_vol_no_override(d_px_2d):
          [0, 0, 0, 0, 0],
          [-0.118766, 0.29189, -0.271683, 0.231726, -0.118766]]
     ).T
-    actual = im.rescale_frame_vol(d_px_2d, vol_mult)
+    actual = im.rescale_frame_vol(d_px_2d, vol_mult=vol_mult)
     np.testing.assert_allclose(actual, expected, atol=1e-6)
 
 
@@ -189,7 +189,7 @@ def test_rescale_frame_vol_override_float(d_px_2d):
         [0.01, 0.01, 0.01, 0.01, 0.01],
         [-0.091, 0.332596, -0.248734, 0.270536, -0.091]
     ]).T
-    actual = im.rescale_frame_vol(d_px_2d, vol_mult, new_g_mean=0.01)
+    actual = im.rescale_frame_vol(d_px_2d, vol_mult=vol_mult, new_g_mean=0.01)
     np.testing.assert_allclose(actual, expected, atol=1e-6)
 
 
@@ -201,14 +201,14 @@ def test_rescale_frame_vol_override_array(d_px_2d):
         [-0.01, -0.01, -0.01, -0.01, -0.01],
         [-0.082, 0.34579, -0.241296, 0.283116, -0.082]
     ]).T
-    actual = im.rescale_frame_vol(d_px_2d, vol_mult, new_g_mean=new_g_mean)
+    actual = im.rescale_frame_vol(d_px_2d, vol_mult=vol_mult, new_g_mean=new_g_mean)
     np.testing.assert_allclose(actual, expected, atol=1e-6)
 
 
 @pt.fixture
 def cash_flow():
     cf = np.array(
-        [-1, 0, 0.05, 0, -0.2, 0.2, 0.05, -0.09, 1.1 ]
+        [-1, 0, 0.05, 0, -0.2, 0.2, 0.05, -0.09, 1.1]
     )
     return cf
 
@@ -234,6 +234,23 @@ def test_irr_solve_my_guess_bnds(cash_flow):
     assert pt.approx(exp_irr, abs=1.0e-6) == act_irr
 
 
+def test_irr_solve_ann_freq(cash_flow):
+    guess = 0.01
+    bounds = (-0.1, +0.5)
+    act_irr = im.irr_solve(cash_flow, 30, 240, guess, bounds, 1)
+    exp_irr = 0.111499
+    assert pt.approx(exp_irr, abs=1.0e-6) == act_irr
+
+
+
+def test_irr_solve_qtr_freq(cash_flow):
+    guess = 0.01
+    bounds = (-0.1, +0.5)
+    act_irr = im.irr_solve(cash_flow, 30, 240, guess, bounds, 4)
+    exp_irr = 0.107119
+    assert pt.approx(exp_irr, abs=1.0e-6) == act_irr
+
+
 def test_index_liq_tax_all_lt_gains():
     idx_val = np.array([1, 1.2, 1, 0.9, 1.2, 1.3])
 
@@ -241,9 +258,9 @@ def test_index_liq_tax_all_lt_gains():
     idx_div[1:] = idx_val[:-1] * 0.05
 
     idx_tri = idx_val.copy()
-    idx_tri[1:] = idx_tri[0] * ((idx_val[1:] + idx_div[1:])/idx_val[:-1]).cumprod()
+    idx_tri[1:] = idx_tri[0] * ((idx_val[1:] + idx_div[1:]) / idx_val[:-1]).cumprod()
 
-    tax = im.index_liq_tax(idx_val, idx_div, idx_tri, 240, 240)
+    tax = im.index_liq_tax(idx_val, idx_div, idx_tri, 240, 240, div_payout=False)
     exp_tax = 0.0985108
 
     assert pt.approx(exp_tax, abs=1.0e-6) == tax
@@ -254,12 +271,12 @@ def test_index_liq_tax_with_st_gains():
                         1.156, 1.22, 1.207])
     dt = 60
     idx_div = np.zeros(idx_val.shape)
-    idx_div[1:] = idx_val[:-1] * 0.05 * dt/240
+    idx_div[1:] = idx_val[:-1] * 0.05 * dt / 240
 
     idx_tri = idx_val.copy()
-    idx_tri[1:] = idx_tri[0] * ((idx_val[1:] + idx_div[1:])/idx_val[:-1]).cumprod()
+    idx_tri[1:] = idx_tri[0] * ((idx_val[1:] + idx_div[1:]) / idx_val[:-1]).cumprod()
 
-    tax = im.index_liq_tax(idx_val, idx_div, idx_tri, dt, 240)
+    tax = im.index_liq_tax(idx_val, idx_div, idx_tri, dt, 240, div_payout=False)
     exp_tax = 0.060482328
 
     assert pt.approx(exp_tax, abs=1.0e-6) == tax
@@ -270,14 +287,72 @@ def test_index_liq_tax_column_vectors():
                         1.156, 1.22, 1.207])
     dt = 60
     idx_div = np.zeros(idx_val.shape)
-    idx_div[1:] = idx_val[:-1] * 0.05 * dt/240
+    idx_div[1:] = idx_val[:-1] * 0.05 * dt / 240
 
     idx_tri = idx_val.copy()
-    idx_tri[1:] = idx_tri[0] * ((idx_val[1:] + idx_div[1:])/idx_val[:-1]).cumprod()
+    idx_tri[1:] = idx_tri[0] * ((idx_val[1:] + idx_div[1:]) / idx_val[:-1]).cumprod()
 
-    tax = im.index_liq_tax(idx_val.T, idx_div.T, idx_tri.T, dt, 240)
+    tax = im.index_liq_tax(idx_val.T, idx_div.T, idx_tri.T, dt, 240, div_payout=False)
     exp_tax = 0.060482328
 
     assert pt.approx(exp_tax, abs=1.0e-6) == tax
 
+
+def test_index_liq_tax_all_lt_gains_payout():
+    idx_val = np.array([1, 1.2, 1, 0.9, 1.2, 1.3])
+
+    idx_div = np.zeros(idx_val.shape)
+    idx_div[1:] = idx_val[:-1] * 0.05
+
+    idx_tri = idx_val.copy()
+    idx_tri[1:] = idx_tri[0] * ((idx_val[1:] + idx_div[1:]) / idx_val[:-1]).cumprod()
+
+    tax = im.index_liq_tax(idx_val, idx_div, idx_tri, 240, 240, div_payout=True)
+    exp_tax = 0.084
+
+    assert pt.approx(exp_tax, abs=1.0e-6) == tax
+
+
+def test_index_liq_tax_with_st_gains_payout():
+    idx_val = np.array([1, 1.039, 1.1])
+    dt = 60
+    idx_div = np.zeros(idx_val.shape)
+    idx_div[1:] = idx_val[:-1] * 0.05 * dt / 240
+
+    idx_tri = idx_val.copy()
+    idx_tri[1:] = idx_tri[0] * ((idx_val[1:] + idx_div[1:]) / idx_val[:-1]).cumprod()
+
+    tax = im.index_liq_tax(idx_val, idx_div, idx_tri, dt, 240, div_payout=True)
+    exp_tax = 0.05
+
+    assert pt.approx(exp_tax, abs=1.0e-6) == tax
+
+
+@pt.fixture
+def irr_data():
+    idx_div = [0, 0, 0.05, 0, 0.1, 0.02, 0.05, 0.01, 0.1]
+    idx_start = 1.0
+    idx_end = 0.9
+    dt = 30
+    ann_factor = 240
+
+    irr_data = {'idx_div': idx_div, 'idx_start': idx_start,
+                'idx_end': idx_end, 'dt': dt, 'ann_factor': ann_factor}
+    return irr_data
+
+
+def test_index_irr(irr_data):
+    irr = im.index_irr(irr_data['dt'], irr_data['idx_start'],
+                       irr_data['idx_end'], irr_data['idx_div'],
+                       ann_factor=irr_data['ann_factor'])
+    exp_irr = 0.228283792
+    assert pt.approx(exp_irr, abs=1.0e-6) == irr
+
+
+def test_index_irr(irr_data):
+    irr = im.index_irr(irr_data['dt'], irr_data['idx_start'],
+                       irr_data['idx_end'], irr_data['idx_div'],
+                       ann_factor=irr_data['ann_factor'], freq=4)
+    exp_irr = 0.234924
+    assert pt.approx(exp_irr, abs=1.0e-6) == irr
 
