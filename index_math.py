@@ -7,7 +7,7 @@ from scipy.optimize import minimize
 from numba import njit
 
 
-#@njit
+# @njit
 def index_avg_return(shares: np.array, prices: np.array) -> float:
     """ Calculate average simple period return for an index
         This function assumes a static index with no rebalancing and fixed
@@ -31,7 +31,7 @@ def index_avg_return(shares: np.array, prices: np.array) -> float:
     return avg_period_idx_ret
 
 
-#@njit
+# @njit
 def index_weights_over_time(shares: np.array, prices: np.array) -> np.array:
     """ Calculate index weights over time for a static index w/o rebalancing
         Axis 0 is time, axis 1 - stocks.
@@ -52,7 +52,7 @@ def index_weights_over_time(shares: np.array, prices: np.array) -> np.array:
     return stock_vals / idx_vals.reshape(stock_vals.shape[0], -1)
 
 
-#@njit
+# @njit
 def index_vals(shares: np.array, prices: np.array, norm=False) -> np.array:
     """ Calculate index weights over time for a static index w/o rebalancing
         Axis 0 is time, axis 1 - stocks.
@@ -71,7 +71,7 @@ def index_vals(shares: np.array, prices: np.array, norm=False) -> np.array:
         return idx_vals
 
 
-#@njit
+# @njit
 def total_ret_index(shares: np.array, prices: np.array, idx_div: np.array,
                     idx_vals: Optional[np.array] = None) -> np.array:
     """ Calculate index total returns
@@ -121,8 +121,8 @@ def rescale_ts_vol(d_px: np.array, vol_mult: float, new_g_mean: Optional[float] 
     return (s1 * adj_factor) - 1
 
 
-#@njit
-def rescale_frame_vol(d_px: np.array, vol_mult: float,
+# @njit
+def rescale_frame_vol(d_px: np.array, vol_mult: float = 1,
                       new_g_mean: Optional[Union[np.array, float]] = None) -> np.array:
     """ Rescale volatility for a dataframe
     :param d_px: 2-d array of price changes, axis 0 is time,a axis1 is securities
@@ -148,7 +148,11 @@ def rescale_frame_vol(d_px: np.array, vol_mult: float,
     return (s1 * adj_factor) - 1
 
 
-#@njit
+
+
+
+
+# @njit
 def irr_obj(r: float, cf: np.array, dt: int,
             ann_factor: float = 252) -> float:
     t = np.linspace(start=0, stop=dt * len(cf), num=len(cf), endpoint=False) / ann_factor
@@ -156,26 +160,31 @@ def irr_obj(r: float, cf: np.array, dt: int,
     return abs(pv)
 
 
-#@njit
-def irr_solve(cf: np.array, dt: int, ann_factor: float = 252, guess: float = 0.09, bounds: tuple = (0.0, 0.2)):
+# @njit
+def irr_solve(cf: np.array, dt: int, ann_factor: float = 252, guess: float = 0.09,
+              bounds: tuple = (0.0, 0.2), freq: Optional[int] = None) -> float:
     """ Calculate IRR of an array of cash flows
     :param cf: array of cash flows
     :param dt: length of each step
     :param ann_factor: number of trading days per annum
     :param guess: intiial guess for r
     :param bounds: bounds tuple (lb, up)
+    :param freq: frequency of the calculated IRR (default None, or continuous)
     :return: exponential IRR
     """
     x0 = np.asarray(guess)
     r = minimize(irr_obj, x0, args=(cf, dt, ann_factor), bounds=[bounds]).x
 
-    return r
+    if freq is None:
+        return r[0]
+    else:
+        return (np.exp(r[0] / freq) - 1) * freq
 
 
-@njit
-def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: np.array,
-                  dt: int, ann_factor: float = 252,
-                  tax_lt: float = 0.28, tax_st: float = 0.5) -> float:
+#@njit
+def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: Optional[np.array],
+                  dt: int, ann_factor: float = 252, tax_lt: float = 0.28,
+                  tax_st: float = 0.5, div_payout: bool = True) -> float:
     """ Calculate tax liability for liquidating an index portfolio at the end
     Assume index is based on a fixed basket, so can be treated as single security.
     :param idx_vals:    series of index values (no re-investment of divs)
@@ -185,6 +194,7 @@ def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: np.array,
     :param ann_factor:  number of trading days per annum
     :param tax_lt:      long-term gains tax rate
     :param tax_st:      short-term gains tax rate
+    :param div_payout:  whether index reinvests divs (default True)
     :return:  tax paid on full liquidation of the index at maturity
     """
     # Treat the index as a single security.  Assume that at each
@@ -195,10 +205,13 @@ def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: np.array,
     i_div = idx_div.ravel()
     i_tri = idx_tri.ravel()
 
-    # Calculate size of lots for 'reinvesting dividends'
+    # Calculate size of lots for 'reinvesting dividends' (if specified)
     n_points = len(i_val)
     lot_basis = i_val.copy()
-    lot_basis[1:] = i_div[1:] * i_tri[:-1] / i_val[:-1]
+    if div_payout:
+        lot_basis[1:] = 0
+    else:
+        lot_basis[1:] = i_div[1:] * i_tri[:-1] / i_val[:-1]
 
     # Capital gain on each lot
     gain_prc = i_val[-1] / i_val - 1
@@ -213,3 +226,34 @@ def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: np.array,
     tax = tax_rates @ gain
 
     return tax
+
+
+# def index_irr(dt: int, idx_start: float, idx_end: float, idx_div: np.array,
+#               guess: float = 0.09, bounds: tuple = (0.0, 0.2), ann_factor: float=252) -> float:
+def index_irr(dt: int, idx_start: Union[float, np.ndarray], idx_end: Union[float, np.ndarray],
+              idx_div: np.array,
+              guess: float = 0.09, bounds: tuple = (-0.5, 0.5),
+              ann_factor: float = 252, freq: Optional[int] = None) -> float:
+    """ Calculate IRR of an index
+    :param dt: length of each time step in days
+    :param idx_start: starting value of an index
+    :param idx_end: final value of an index
+    :param idx_div: vector of index dividends
+    :param guess: intiial guess for r
+    :param bounds: bounds tuple (lb, up)
+    :param ann_factor: number of trading days per annum
+    :param freq: frequency of the calculated IRR (default None, or continuous)
+    :return: exponential annualized irr of the cash flows
+    """
+
+    # If start/end values were given as arrays, convert to float
+    i_start = idx_start[0] if isinstance(idx_start, np.ndarray) else idx_start
+    i_end = idx_end[0] if isinstance(idx_start, np.ndarray) else idx_end
+
+    cf = idx_div.copy()
+    cf[0] -= i_start
+    cf[-1] += i_end
+
+    irr = irr_solve(cf, dt, ann_factor=ann_factor, guess=guess, bounds=bounds, freq=freq)
+
+    return irr

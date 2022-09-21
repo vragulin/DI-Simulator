@@ -9,6 +9,7 @@ import sys
 import time
 from contextlib import suppress
 from typing import Optional
+import warnings
 import dateutil.relativedelta as du
 
 import config
@@ -22,6 +23,7 @@ from pretty_print import df_to_format
 def load_params(file: str) -> dict:
     """ load simulation settings """
 
+    warnings.simplefilter(action='ignore', category=UserWarning)
     df_params = pd.read_excel(file, sheet_name='params', index_col='Name')
     params = df_params['Value'].to_dict()
 
@@ -41,32 +43,32 @@ def load_params(file: str) -> dict:
     return params
 
 
-def load_data(params: dict, randomize=False) -> dict:
+def load_data(data_files, params: dict) -> dict:
     """ Load simulation settings from an excel file
     :param params: dictionary with global simulation settings (i.e. not specific to path
     :param randomize: if True, generate random paths
     """
     # Load market data
     fixed_weight_flag = (params['benchmark_type'] == 'fixed_weights')  # the other setting is fixed_shares
-    vol_scaling = params.get('vol_scaling', 1.0)
+    rand_state = params.get('rand_state', 0)
 
-    mdata = load_mkt_data(params['dt'], replace=params['replace'], randomize=randomize,
-                          return_override=params['ret_override'], vol_scaling=vol_scaling,
-                          fixed_weights=fixed_weight_flag)
+    mdata = load_mkt_data(data_files, params['dt'])
 
     params['n_steps'] = n_steps = len(mdata['d_px']) - 1
 
     # Array of rebalance dates (so that we finish arond today)
     # Use simulated values for simplicity since we are randomizing anyway.
-    if params['dt'] in [20, 60]:
-        month_gap = int(params['dt']/20)
-        rebal_dates = sorted([config.t_last + du.relativedelta(months=-month_gap * x)
-                              for x in range(n_steps + 1)])
-    elif params['dt'] == 5:
-        rebal_dates = sorted([config.t_last + du.relativedelta(weeks=-x)
-                              for x in range(n_steps + 1)])
-    else:
-        raise ValueError(f"Rebalance freq dt={params['dt']} not implemented.")
+    # if params['dt'] in [20, 60]:
+    #     month_gap = int(params['dt']/20)
+    #     rebal_dates = sorted([config.t_last + du.relativedelta(months=-month_gap * x)
+    #                           for x in range(n_steps + 1)])
+    # elif params['dt'] == 5:
+    #     rebal_dates = sorted([config.t_last + du.relativedelta(weeks=-x)
+    #                           for x in range(n_steps + 1)])
+    # else:
+    #     raise ValueError(f"Rebalance freq dt={params['dt']} not implemented.")
+
+    rebal_dates = [mdata['dates'][i].date() for i in mdata['dates_idx']]
 
     # Pack data into pandas dataframes
     tickers = mdata['d_px'].columns
@@ -79,9 +81,13 @@ def load_data(params: dict, randomize=False) -> dict:
     # Pack into a dictionary
     data_dict = {'w_idx': w_idx, 'div': div, 'd_px': d_px, 'px': px,
                  'd_tri': d_tri, 'dates': rebal_dates, 'params': params,
-                 'randomize': randomize, 'vol_mult': mdata['vol_mult'],
+                 'randomize': params['randomize'],
+                 'vol_mult': mdata['vol_mult'],
                  'rng': params['rng'], 'mkt_data': mdata,
                  'prices_from_pickle': True}
+
+    # print("First 5 weights:", data_dict['w_idx'].values[0, :5])
+    # print("First 5 returns:", data_dict['d_px'].values[1, :5])
 
     return data_dict
 
@@ -116,7 +122,7 @@ if __name__ == "__main__":
     print(df_to_format(step_report * 100, formats={'_dflt': '{:.2f}'}))
 
     print("\nSimulation statistics:")
-    print(df_to_format(pd.DataFrame(sim_stats * 100, columns=["annualized (%)"]), formats={'_dflt': '{:.2f}'}))
+    print(df_to_format(pd.DataFrame(sim_stats * 100, columns=["annualized (%)"]), formats={'_dflt': '{:.6f}'}))
 
     print("\nDone")
 

@@ -5,167 +5,168 @@ import os
 import numpy as np
 import pandas as pd
 from typing import Optional
+from enum import Enum
 import index_math as im
-import config
-
-# Data location
-working_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp/"
-PX_PICKLE = "idx_prices.pickle"
-TR_PICKLE = "idx_t_rets.pickle"
-W_PICKLE = "idx_daily_w.pickle"
+import config as cnf
+from rescale_stock_paths import rescale_stocks_to_match_idx
 
 
-def load_mkt_data(data_freq: int, replace: bool = False, randomize: bool = False,
-                  return_override: Optional[float] = None, vol_scaling: float = 1.0, fixed_weights: bool = True) -> dict:
+
+
+def process_mkt_data(input: dict, data_freq: int, randomize: bool = False,
+                     replace: bool = False, random_w: bool = False,
+                     return_override: Optional[float] = None,
+                     vol_override: float = -1,
+                     vol_fixed_w: bool = True,
+                     stk_res_vol_factor: Optional[float] = None,
+                     ann_factor: float = 1.0,
+                     rand_seed: Optional[int] = 0,
+                     rand_seed_w: Optional[int] = 0) -> dict:
+    """ Update market data before using it in the simulation
+        If needed randomize (using random_state as an input
+        And/or rescale to match target index return, index vol
+        And rescale residaual stock vol by a factor.  Do processing in place.
+
+        :param input: dictionary with data to be processed (in place)
+        :param data_freq: trading days between data points (aka dt)
+        :param randomize: if True, reshuffle returns
+        :param replace: if True and do reshuffle with replacement
+        :param random_w: if True - generate new random weights
+        :param return_override: if not None, set index return to the target return
+                                (annual, with freq set by freq of data points)
+        :param vol_override: if not negative, set vol of index paths to this value
+        :param vol_fixed_w: if True, set set to target index with fixed weights at t=0
+                                    otherwise, set to target the vol of the entire series
+        :param stk_res_vol_factor: if not None, apply a multiplicative scalar to the
+                                    residual volatilities, keep index vol the same
+        :param ann_factor: annualization factor
+        :param rand_seed: random seed used to reshuffle returns
+        :param rand_seed_w: random seed used to generate new returns
+
+        :return: dictionary with moments (mean, std, resid vol etc.) of the rescaled paths
     """
-    :param data_freq:  number of trading days between rebalance points
-    :param replace: if True, sample with replacement when randomly selecting historical returns
-    :param randomize: generate price history by randomly selecting historical returns (by days)
-    :param return_override: adjust simulated index return to be equal to a specific number
-    :param vol_scaling: rescale volatility of the series by a factor,
 
-            keep mean geometric return same or equal to override below
+
+
+    pass
+
+
+def load_mkt_data(data_files: dict, data_freq: int, filter_params: Optional[dict] = None,
+                  fixed_weights: bool = False, rand_w: bool = True,
+                  rand_seed: Optional[int] = None) -> dict:
+    """
+    load market data from files and do some simple processing
+    :param data_files: dictionary with paths to pickle files with data
+    :param data_freq:  number of trading days between rebalance points
+    :param filter_params: dictionary with parameters controlling how we filter out bad data
+                        if None - no filtering, otherwise need fields 'max' and 'min'.
+    :param rand_w: if True generate random weights, else use weights form the pickle file
+    :param rand_seed: random seed used to generate random weights (for replicatbility)
     :param fixed_weights: if True assume fixed index weights for the stocks, otherwise, assume equal shares
                             (and weights evolve in line with stock prices)
-    :return: dict of arrays with simulated or historical prices, returns, weights to be used for analysis
+    :return: dict of arrays with prices, returns, weights to be used for analysis
+             no re-scaling or randomization in this function - this will be done in a separate
+             function
     """
 
-    px = pd.read_pickle(os.path.join(working_dir, PX_PICKLE)).fillna(method='ffill').fillna(0)
+    # Load data from files
+    px = pd.read_pickle(data_files['px']).fillna(method='ffill').fillna(0)
+    dates = px.index
+    dates_idx = range(0, len(px.index), data_freq)
     px.index = range(0, len(px.index))
-    px = px.reindex(index=range(0, len(px.index), data_freq))
+    px = px.reindex(index=dates_idx)
 
-    tri = pd.read_pickle(os.path.join(working_dir, TR_PICKLE)).fillna(method='ffill').fillna(0)
+    tri = pd.read_pickle(data_files['tri']).fillna(method='ffill').fillna(0)
     tri.index = range(0, len(tri.index))
-    tri = tri.reindex(index=range(0, len(tri.index), data_freq))
+    tri = tri.reindex(index=dates_idx)
 
-    w = pd.read_pickle(os.path.join(working_dir, W_PICKLE)).fillna(0)
-    w.index = range(0, len(w.index))
-    w = np.maximum(0, w.reindex(index=range(0, len(w.index), data_freq)))
-    w /= (np.sum(w.to_numpy(), axis=1)[:, None] @ np.ones((1, len(w.columns))))
-
-    out_dict = {'px': px, 'tri': tri, 'w': w}
+    # Load weights only if needed
+    if not rand_w:
+        w = pd.read_pickle(data_files['w']).fillna(0)
+        w.index = range(0, len(w.index))
+        w = np.maximum(0, w.reindex(index=dates_idx))
+    else:
+        w = None
 
     # Build returns
-    out_dict['d_px'] = out_dict['px'].pct_change().fillna(0).replace(np.inf, 0)
-    out_dict['d_tri'] = out_dict['tri'].pct_change().fillna(0).replace(np.inf, 0)
+    d_px = px.pct_change().fillna(0).replace(np.inf, 0)
+    d_tri = tri.pct_change().fillna(0).replace(np.inf, 0)
 
     # Check that we don't have negative dividends, this can happen if we have bad input data
-    out_dict['d_tri'] = np.maximum(out_dict['d_tri'], out_dict['d_px'])
+    d_tri = np.maximum(d_tri, d_px)
+    div = d_tri - d_px
 
-    out_dict['div'] = out_dict['d_tri'] - out_dict['d_px']
+    # find stocks present for the entire sample and ones that stayed within price bands
+    # for fixed share indices large movers can cause problems, because their weights can get too high
+    if filter_params is None:
+        px_cap, px_floor = 1e10, 1e-10
+    else:
+        px_cap = filter_params.get('max', 1e10)
+        px_floor = filter_params.get('min', 1e-10)
 
-    # Keep track of whether volatility has been rescaled
-    out_dict['vol_mult'] = 1.0
-
-    # Only use series with good data
-    px = out_dict['px']
-    n_steps = px.shape[0] - 1
-    freq = config.ANN_FACTOR / data_freq
-
-    # find stocks present for the entire sample and (for fixed share indices) ones that have not risen too much and pull out everything else
-    max_rise = 1e10 if fixed_weights else config.max_rise  # only check max_rise for fixed shares indices
-    full_indic = (
-            (px > px.loc[0, :] * (1 - config.max_drop)) &
-            (px < px.loc[0, :] * (1 + max_rise))
+    full_indic: np.array = (
+            (px > px.loc[0, :] * px_floor) &
+            (px < px.loc[0, :] * px_cap)
     ).all().values
 
-    if randomize:
-        d_px = out_dict['d_px'].iloc[:, full_indic].sample(frac=1, replace=replace).reset_index(drop=True)
-    else:
-        d_px = out_dict['d_px'].iloc[:, full_indic].reset_index(drop=True)
-    d_px.iloc[0, :] = 0
+    d_px = d_px.iloc[:, full_indic].reset_index(drop=True)
+    n_stocks = d_px.shape[1]
+    n_steps = d_px.shape[0] - 1
 
     # Set random weights
-    rand_weights = np.exp(np.random.normal(size=(1, d_px.shape[1])))
-    rand_weights /= np.sum(rand_weights)
+    if rand_w:
+        if rand_seed is not None:
+            np.random.seed(rand_seed)
+        w_arr = np.exp(np.random.normal(size=(1, n_stocks)))
+        w = pd.DataFrame(w_arr, index=[0], columns=d_px.columns)
+    else:
+        w = w.iloc[:, full_indic]
 
-    # Rescale volatility of the series if needed
-    if 'vol_mult' not in out_dict:
-        out_dict['vol_mult'] = 1
-    elif vol_scaling != out_dict['vol_mult']:
-        # Row 0 of d_px is all zeros, so update everything from row 1
-        d_px.values[1:, :] = im.rescale_frame_vol(d_px.values[1:, :],
-                                                  vol_scaling / out_dict['vol_mult'])
-        out_dict['vol_mult'] = vol_scaling
+    # Rescale weighs to add up to 1
+    w = w.div(w.sum(axis=1), axis='rows')
 
-    # Get returns approximately equal to override
-    if return_override is not None:
-        if fixed_weights:
-            rand_return = freq * (
-                    np.product(1 + (rand_weights * d_px).sum(axis=1)
-                               ) ** (1 / n_steps) - 1
-            )
-        else:  # fixed shares
-            rand_return = freq * ((rand_weights @ np.product(1 + d_px, axis=0)
-                                   ) ** (1 / n_steps) - 1
-                                  )[0]  # Convert to scalar from an array
+    # Calculate various return series
+    px = (1 + d_px).cumprod()
+    div = div.iloc[:, full_indic].reset_index(drop=True)
+    d_tri = d_px + div
+    tri = (1 + d_tri).cumprod()
 
-        d_px.iloc[1:, :] += (return_override - rand_return) / freq
-
-    # Ensure that prices don't go below max_drop to avoid computational issues
-    d_px = np.maximum(d_px, -config.max_drop)
-
-    # Pack results into the output dictionary
-    out_dict['d_px'] = d_px
-    out_dict['px'] = px = (1 + d_px).cumprod()
-    out_dict['div'] = out_dict['div'].iloc[:, full_indic].reset_index(drop=True)
-    out_dict['d_tri'] = out_dict['d_px'] + out_dict['div']
-
+    # Calculate weights
     if fixed_weights:
-        out_dict['w'] = np.ones((n_steps + 1, 1)) @ rand_weights
+        weights = np.ones((n_steps + 1, 1)) @ w
     else:  # fixed shares
-        out_dict['w'] = im.index_weights_over_time(rand_weights, px.values)
+        weights = im.index_weights_over_time(w.values, px.values)
 
-    # Vectorize
-    for k in ('d_px', 'd_tri', 'div', 'w'):
-        if isinstance(out_dict[k], pd.DataFrame):
-            out_dict[k + '_arr'] = out_dict[k].to_numpy()
-        else:
-            out_dict[k + '_arr'] = out_dict[k]
+    df_w = pd.DataFrame(weights, index=px.index, columns=px.columns)
 
-    # Capture other settings
-    out_dict['fixed_weights'] = fixed_weights
-
-    if config.DEBUG_MODE:
-        print(f"Load mkt data called. array_shape = {out_dict['d_px'].shape}")
+    # Pack data into an output dictionary
+    out_dict = {'px': px, 'd_px': d_px, 'div': div, 'tri': tri, 'd_tri': d_tri,
+                'w': df_w, 'fixed_weights': fixed_weights,
+                'dates': dates, 'dates_idx': dates_idx}
 
     return out_dict
 
 
 # Entry point
 if __name__ == "__main__":
-    # Build inputs
-    inputs = {'dt': 60,
-              'tau_div_start': 0.0,
-              'tau_div_end': 0.0,
-              'tau_st_start': 0.0,
-              'tau_st_end': 0.0,
-              'tau_lt_start': 0.0,
-              'tau_lt_end': 0.0,
-              'donate_start_pct': 0.00,
-              'donate_end_pct': 0.00,
-              'div_reinvest': False,
-              'div_payout': True,
-              'div_override': 0.00,
-              'harvest': 'none',
-              'harvest_thresh': -0.02,
-              'harvest_freq': 60,
-              'clock_reset': False,
-              'rebal_freq': 60,
-              'donate_freq': 240,
-              'donate_thresh': 0.0,
-              'terminal_donation': 0,
-              'donate': False,
-              'replace': False,
-              # 'randomize': False,
-              'randomize': True,
-              'return_override': -1,
-              'N_sim': 1,
-              'savings_reinvest_rate': -1,
-              'loss_offset_pct': 1,
-              }
+    # Set up inputs
+    data_files = {
+        'px': os.path.join(cnf.working_dir, cnf.PX_PICKLE),
+        'tri': os.path.join(cnf.working_dir, cnf.TR_PICKLE),
+        'w': os.path.join(cnf.working_dir, cnf.W_PICKLE)
+    }
 
-    data_dict = load_mkt_data(inputs['dt'], replace=inputs['replace'], randomize=inputs['randomize'],
-                              return_override=inputs['return_override'])
+    dt = 60
+
+    filter_params = {
+        'max': 1 + cnf.max_rise,
+        'min': 1 - cnf.max_drop
+    }
+
+    # Pull data
+    data_dict = load_mkt_data(data_files, dt, filter_params=filter_params,
+                              rand_w=False)
+
+    stats = process_mkt_data(data_dict, dt)
 
     print('Done')

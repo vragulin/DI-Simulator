@@ -88,7 +88,10 @@ class PortLots:
         # TODO - re-write this as an alternative constructor (e.g. with multiple dispatch)
 
         tickers = sim_data['tickers']
-        w_tgt = sim_data['w'][0, :]
+        if len(sim_data['w'].shape) == 1:
+            w_tgt = sim_data['w']
+        else:
+            w_tgt = sim_data['w'][0, :]
         cash = 1 - w_tgt.sum()
         t_date = sim_data['dates'][0]
 
@@ -205,7 +208,6 @@ class PortLots:
         # Alias some variables for brevity
         df_stocks = self.df_stocks
         df_lots = self.df_lots
-
 
         # Ensure that we have at least 1 lot per stock.  If for some stocks there are none,
         # add dummy lots with zero positions
@@ -370,7 +372,8 @@ class PortLots:
             "Trades and Positions series indices are not the same."
 
         # Check if the rebalance is valid
-        if (-trades > self.df_stocks['max_sell'] + np.finfo(float).eps * 1e4).any():  # Check within computational tolerance
+        if (-trades > self.df_stocks['max_sell'] + np.finfo(
+                float).eps * 1e4).any():  # Check within computational tolerance
             print("Some trades exceed max_sell.")
         # assert (-trades <= self.df_stocks['max_sell']).all(), \
         #     "Some trades exceeds max_sell."
@@ -405,6 +408,7 @@ class PortLots:
         df_lots = df_lots[df_lots['shares'] > config.tol]
 
         # Append new buy lots to the dataframe
+        #TODO - filter out zero lots before appending
         df_new_lots = pd.DataFrame(trades)
         df_new_lots['price'] = self.df_stocks['price']
         df_new_lots = df_new_lots[trades > 0].reset_index()
@@ -456,7 +460,6 @@ class PortLots:
         reset_tax = np.sum(df_lots['reset_indic'] * df_lots['tax per shr'] * df_lots['shares'])
         return reset_tax
 
-
     def liquid_tax(self, liq_pct: float = 1.0) -> float:
         """ Taxes incurred when selling fraction of the portfolio
             Assumes portfolio has been updated for the new market data
@@ -469,4 +472,54 @@ class PortLots:
         tax = df_lots['shares'] @ df_lots['tax per shr']
 
         return tax * liq_pct
+
+    def harvest_inst_replace(self, t: float, sim_data: dict) -> dict:
+        """Harvest all loss lots above threshold and replace them at the same price
+            and do proper logging.  Assume that we have updated securities prices and
+            portfolio value with the port.update_sim_data() method.
+            :param t: rebalance time
+            :param sim_data:  dictionary with sim data
+            :return: dictionary with simulation data
+        """
+
+        # Process lots to speed up calculations
+        t_date = sim_data['dates'][t]
+        params = sim_data['params']
+        self.process_lots(sim_data['tax'], t_date)
+
+        df_lots = self.df_lots
+        df_stocks = self.df_stocks
+
+        # Identify loss lots below threshold
+        df_lots['below_thresh'] = df_lots['%_gain'] <= params['harvest_thresh']
+
+        # Update start date and cost basis for the harvested lots
+        df_lots['basis'] = np.where(df_lots['below_thresh'], df_lots['price'], df_lots['basis'])
+        df_lots['start_date'] = np.where(df_lots['below_thresh'], self.t_date, df_lots['start_date'])
+        df_lots['harvest_trade'] = np.where(df_lots['below_thresh'], df_lots['shares'], 0)
+
+        # Calculate tax incurred in the reset
+        tax = df_lots['below_thresh'] @ (df_lots['tax per shr'] * df_lots['shares'])
+
+        # Insert a column with harvested trades
+        df_stocks['harvest_trade'] = df_lots.groupby(by='ticker')['harvest_trade'].sum()
+
+        # Reinvest (excess) cash at the current prices:
+        xs_cash = self.cash - self.cash_w_tgt * self.port_value
+
+        # Check that it's not a rounding error, if so doon't create new lots.
+        if np.abs(xs_cash / self.port_value) > config.tol:
+            factor = xs_cash / (self.port_value - self.cash)
+            df_stocks['trade'] = df_stocks['shares'] * factor
+        else:
+            df_stocks['trade'] = 0
+
+        # Pack trades into the structure
+        res = {'opt_trades': df_stocks['trade'], 'potl_harvest': -tax, 'harvest': -tax}
+
+        res['harvest_trades'] = df_stocks['harvest_trade']
+        res['harv_ratio'] = 1.0
+        res['port_val'] = self.port_value
+
+        return res
 

@@ -18,7 +18,7 @@ import time
 from typing import Union
 from contextlib import suppress
 from port_lots_class import PortLots
-from obj_function import obj_func_w_lots, fetch_obj_params
+from obj_function import obj_func_w_lots, fetch_obj_params, tax_lots
 from gen_random import gen_rand_returns
 from pretty_print import df_to_format
 from simulator_class import Simulator
@@ -38,6 +38,10 @@ def load_sim_settings_from_file(file: str, randomize=False) -> dict:
     # Disable warnings related to data validation and read the parameters
     warnings.simplefilter(action='ignore', category=UserWarning)
     params = pd.read_excel(file, sheet_name='params', index_col='Name')
+
+    # Ensure correct data types
+    params.loc['donate', 'Value'] = float(params.loc['donate', 'Value'])
+    params.loc['final_liquidation', 'Value'] = int(params.loc['final_liquidation', 'Value'])
 
     if not randomize:
         prices = pd.read_excel(file, sheet_name='prices', index_col='Ticker')
@@ -61,41 +65,48 @@ def load_sim_settings_from_file(file: str, randomize=False) -> dict:
     return input_dict
 
 
-def process_input_data_from_pickle(inputs: dict, return_override: float = None) -> dict:
+def process_input_data_from_pickle(inputs: dict) -> dict:
     """ Process inputs into a format consistent with simulation
         Adjust returns of individual stocks to match target index (price) return
     """
 
     tickers = list(inputs['d_px'].columns)
-    n_steps = len(inputs['d_px'].index)
     params = inputs['params']
+    freq = int(config.ANN_FACTOR / params['dt'])
 
     # Prices and changes - normalized to start from 1.0
     d_px = inputs['d_px']
     d_tri = inputs['d_tri']
-    w = inputs['w_idx']
+    w = inputs['w']
 
     px = (1 + d_px).cumprod()
     tri = (1 + d_tri).cumprod()
-    div = d_tri - d_px
+    if params['div_override'] < 0:
+        div = d_tri - d_px
+    else:
+        div = d_px * 0
+        div[(div.index % freq == 0) & (div.index > 0)] = params['div_override']
 
-    if inputs['mkt_data']['fixed_weights']:
+    if inputs['params']['benchmark_type'] == 'fixed_weights':
         idx_vals = (1 + (d_px * w).sum(axis=1)).cumprod()
         idx_tri = (1 + (d_tri * w).sum(axis=1)).cumprod()
         idx_div = (div * w).sum(axis=1)
     else:
-        w_start = w.values[0, :]
-        idx_vals = im.index_vals(w_start, px.values)
+        idx_vals = im.index_vals(w, px.values)
         idx_div = np.zeros(idx_vals.shape)
-        idx_div[1:] = (div.values[1:] * px.values[:-1]) @ w_start
-        idx_tri = im.total_ret_index(w_start, px.values, idx_div,
+        idx_div[1:] = (div.values[1:] * px.values[:-1]) @ w
+
+        idx_tri = im.total_ret_index(w, px.values, idx_div,
                                      idx_vals=idx_vals)
+
+    # Calculate portfolio review dates
+    dates = (pd.to_datetime(list(inputs['dates'])).date)[inputs['dates_idx']]
 
     # Pack results into an output structure
     out_dict = {'tickers': tickers, 'px': px, 'd_px': d_px, 'tri': tri, 'd_tri': d_tri,
-                'div': div.values, 'w': w.values, 'idx_div': idx_div,
+                'div': div.values, 'w': w, 'idx_div': idx_div,
                 'idx_vals': idx_vals, 'idx_tri': idx_tri,
-                'dates': inputs['dates'], 'tax': config.tax,
+                'dates': dates, 'tax': config.tax,
                 'params': params, 'trx_cost': config.trx_cost}
 
     return out_dict
@@ -156,7 +167,7 @@ def process_input_data_from_xl(inputs: dict, return_override: float = None) -> d
 
     w = im.index_weights_over_time(w_start, px.values)
     idx_vals = im.index_vals(w_start, px.values)
-    idx_tri = im.total_ret_index(w_start, px.values, idx_div)
+    idx_tri = im.total_ret_index(w_start, px.values, idx_div * (1 - config.tax['div']))
 
     # Pack results into an output structure
     out_dict = {'tickers': tickers, 'px': px, 'd_px': d_px, 'tri': tri, 'd_tri': d_tri,
@@ -197,7 +208,7 @@ def init_sim_hist(port: PortLots) -> list:
         'net_buy': 0
     }
 
-    sim_hist = [{'opt': opt, 'rebal': rebal, 'donate': 0, 'clock_reset_tax': 0}]
+    sim_hist = [{'opt': opt, 'div': 0, 'rebal': rebal, 'donate': 0, 'clock_reset_tax': 0}]
 
     return sim_hist
 
@@ -218,12 +229,25 @@ def log_port_report(port: PortLots, t: int, lots: bool = True, log=True) -> None
         out_func(port.df_lots[['ticker', 'start_date', 'shares', 'basis', 'price', '%_gain']])
 
 
-def port_divs_during_period(port: PortLots, t: int, sim_data: dict) -> None:
+def port_divs_during_period(port: PortLots, t: int, sim_data: dict) -> float:
     """ Calculate portfolio divs received during the period (assume that all stocks are ex-div on the last day """
 
-    stock_divs = sim_data['div'][t, :]
+    params = sim_data['params']
+    n_stocks = sim_data['div'].shape[1]
+
+    if True: #params['div_override'] < 0:
+        stock_divs = sim_data['div'][t, :]
+        prices = sim_data['px'].values[t - 1, :]
+    else:
+        if (params['dt'] * t) % config.ANN_FACTOR == 0:
+            stock_divs = params['div_override'] * np.ones(n_stocks)
+        else:
+            stock_divs = np.zeros(n_stocks)
+
+        # Replicate JH code - define div yield as % of p(t), not p(t-1)
+        prices = sim_data['px'].values[t, :]
+
     shares = port.df_stocks['shares'].values
-    prices = sim_data['px'].values[t - 1, :]
     port_divs = (shares * prices) @ stock_divs
 
     return port_divs
@@ -300,7 +324,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
     print('Running opt_rebalance')
 
     # Run the heursitic optimizer to generate the initial guess and a list of 'to_buy' and 'to_sell' stocks
-    opt_res = heuristic_rebalance(port, t, sim_data, max_harvest)
+    res_first_step = heuristic_rebalance(port, t, sim_data, max_harvest)
 
     # ----------------------------------------------------
     # Improve the initial guess through the optimization
@@ -309,7 +333,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
     inp = fetch_obj_params(port, t, sim_data, max_harvest)
 
     # Set up bounds and an initial guess
-    guess = opt_res['opt_trades']
+    guess = res_first_step['opt_trades']
     bounds = gen_bounds(guess, port, t, sim_data, max_harvest)
 
     # Constraints
@@ -322,7 +346,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
         new_cash = port_cash - price @ trades
 
         w_excess_cash = new_cash / (port_value - trx_costs.sum()) - min_w_cash
-        return w_excess_cash
+        return w_excess_cash + np.finfo(float).eps  # Give some flex for rounding error
 
     # Active beta of the new portfolio
     # @njit
@@ -341,10 +365,11 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
         return new_beta_actv
 
     print("Checking if the guess is feasible and calc its obj_func:")
-    xcash = new_excess_cash(guess, inp["price"], inp["trx_cost"], inp["cash"], inp["port_val"], inp["min_w_cash"])
+    xcash = new_excess_cash(guess.values, inp["price"], inp["trx_cost"], inp["cash"], inp["port_val"],
+                            inp["min_w_cash"])
     print(f"Excess cash = {xcash * 100:.3f}%")
 
-    guessbeta = new_active_beta(guess, inp["shares"], inp["price"], inp["beta"],
+    guessbeta = new_active_beta(guess.values, inp["shares"], inp["price"], inp["beta"],
                                 inp["w_tgt"], inp["trx_cost"], inp["port_val"])
     print(f"Active beta = {guessbeta * 100:.3f}%")
 
@@ -407,7 +432,24 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
         ret_sim.f_handle.close()
 
     # Unpack the output structure and prepare the output
-    return {}
+    # Pack output into a dictionary
+    # Note that the harvest field does not take into account the tax we paid on rebalancing trades
+    # that is taken from the port.rebal_sim() method
+    df_stocks = port.df_stocks
+    df_lots = port.df_lots
+
+    res = res_first_step.copy()
+    opt_trades = max_adj_ret['x']
+
+    df_stocks['trade'] = opt_trades
+    harvest = -tax_lots(opt_trades, inp['max_sell'], inp['tax_per_shr'], inp['cum_shrs'],
+                        inp['tkr_broadcast_idx'], inp['tkr_block_idx'])
+
+    res['opt_trades'] = df_stocks['trade']
+    res['harvest'] = harvest
+
+    res['harv_ratio'] = res['harvest'] / res['potl_harvest'] if res['potl_harvest'] > 0 else np.nan
+    return res
 
 
 def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0.5) -> dict:
@@ -577,7 +619,7 @@ def update_donate(port: PortLots, donate_thresh: float, donate_pct: float) -> fl
         df_lots.loc[partial_idx, 'mv'] = df_lots.loc[partial_idx, 'donated']
         df_lots.loc[partial_idx, 'shares'] = df_lots.loc[partial_idx, 'mv'] / df_lots.loc[partial_idx, 'price']
 
-        # Append new los to the dataframe
+        # Append new lot to the dataframe
         # df_lots = pd.concat([df_lots, new_lot])
         df_lots.loc[new_idx, :] = new_lot.loc[new_idx, :]
 
@@ -590,7 +632,7 @@ def update_donate(port: PortLots, donate_thresh: float, donate_pct: float) -> fl
     if config.DEBUG_MODE:
         total_donated = df_lots['donated'].sum()
         assert pytest.approx(total_donated, rel=config.tol) \
-            == np.minimum(donate_amount, np.max(df_lots['cum_mv'])), \
+               == np.minimum(donate_amount, np.max(df_lots['cum_mv'])), \
             f"Donate amount doea not match: target={donate_amount}, actual={total_donated}"
 
     return donate_amount
@@ -600,29 +642,42 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
     """ Print simulationr results """
 
     params = sim_data['params']
+    algorithm = params['algorithm']
+    div_payout = params.get('div_payout', True)
+
     freq = int(config.ANN_FACTOR / params['dt'])
     n_steps = len(sim_hist) - 1
 
     rpt_cols = ['hvst_grs', 'hvst_net', 'hvst_potl', 'ratio_grs', 'ratio_net',
-                'donate', 'tracking', 'port_val', 'bmk_val']
+                'donate', 'div', 'tracking', 'port_val', 'bmk_val']
     df_report = pd.DataFrame(np.nan, columns=rpt_cols, index=range(n_steps + 1))
     df_report.index.name = 'step'
 
     for i in range(n_steps + 1):
         df_report.loc[i, 'hvst_grs'] = sim_hist[i]['opt']['harvest']
-        df_report.loc[i, 'hvst_net'] = -sim_hist[i]['rebal']['tax'] - sim_hist[i]['clock_reset_tax']
+
+        if algorithm == 'inst_replace':
+            df_report.loc[i, 'hvst_net'] = df_report.loc[i, 'hvst_grs']
+        else:
+            df_report.loc[i, 'hvst_net'] = -sim_hist[i]['rebal']['tax']
+        df_report.loc[i, 'hvst_net'] -= sim_hist[i]['clock_reset_tax']
+
         df_report.loc[i, 'hvst_potl'] = sim_hist[i]['opt']['potl_harvest']
         df_report.loc[i, 'port_val'] = sim_hist[i]['opt']['port_val']
         df_report.loc[i, 'donate'] = sim_hist[i]['donate']
+        df_report.loc[i, 'div'] = sim_hist[i]['div']
 
     # Rescale as % of portfolio value
-    for col in ['hvst_grs', 'hvst_net', 'hvst_potl', 'donate']:
+    for col in ['hvst_grs', 'hvst_net', 'hvst_potl', 'donate', 'div']:
         df_report[col] /= df_report['port_val']
 
     # Compute ratios on an annual rolling basis for smoothness
     df_report['ratio_grs'] = df_report['hvst_grs'].rolling(freq).sum() / df_report['hvst_potl'].rolling(freq).sum()
     df_report['ratio_net'] = df_report['hvst_net'].rolling(freq).sum() / df_report['hvst_potl'].rolling(freq).sum()
-    df_report['bmk_val'] = sim_data['idx_tri'] * df_report.loc[0, 'port_val']
+    if div_payout:
+        df_report['bmk_val'] = sim_data['idx_vals'] * df_report.loc[0, 'port_val']
+    else:
+        df_report['bmk_val'] = sim_data['idx_tri'] * df_report.loc[0, 'port_val']
     df_report['tracking'] = (df_report['port_val'] / df_report['bmk_val']).pct_change()
 
     # Generate other statistics that don't go into the df_report table
@@ -631,11 +686,12 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
     if 'fin_liq_tax' in sim_hist[-1]:
         assert params['benchmark_type'] == "fixed_shares", \
             "Final liquidation only implemented for fixed shares indices."
+
         idx_liq_tax = im.index_liq_tax(
-                        sim_data['idx_vals'], sim_data['idx_div'], sim_data['idx_tri'],
-                        params['dt'], ann_factor=config.ANN_FACTOR,
-                        tax_lt=sim_data['tax']['lt'], tax_st=sim_data['tax']['st']
-                    ) * params['final_liquidation']
+            sim_data['idx_vals'], sim_data['idx_div'], sim_data['idx_tri'],
+            params['dt'], ann_factor=config.ANN_FACTOR,
+            tax_lt=sim_data['tax']['lt'], tax_st=sim_data['tax']['st'],
+            div_payout=div_payout) * params['final_liquidation']
 
         port_liq_tax = sim_hist[-1]['fin_liq_tax']
     else:
@@ -643,37 +699,56 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
 
     # IRR metrics
     years = n_steps / freq
-    sim_stats['idx_irr'] = (((sim_data['idx_tri'][-1] - idx_liq_tax) /
-                             sim_data['idx_tri'][0]) ** (1 / n_steps) - 1)[0] * freq
+    if not div_payout:
+        # sim_stats['idx_irr'] = (((sim_data['idx_tri'][-1] - idx_liq_tax) /
+        #                          sim_data['idx_tri'][0]) ** (1 / n_steps) - 1)[0] * freq
+        sim_stats['idx_irr'] = np.log(((sim_data['idx_tri'][-1] - idx_liq_tax) /
+                                       sim_data['idx_tri'][0]))[0] * freq / n_steps
+    else:
+        sim_stats['idx_irr'] = im.index_irr(
+            params['dt'], sim_data['idx_vals'][0],
+            sim_data['idx_vals'][-1] - idx_liq_tax,
+            sim_data['idx_div'].ravel() * (1 - config.tax['div']),
+            # ann_factor=config.ANN_FACTOR, freq=freq)
+            ann_factor=config.ANN_FACTOR, freq=None)
 
-    # Calculate portfolio after-tax IRR
+        # Calculate portfolio after-tax IRR
     cf = df_report['hvst_net'].values.copy()
+    cf += df_report['div'].values
+    cf *= df_report['port_val'].values
     cf[0] -= df_report.loc[0, 'port_val']
     cf[-1] += df_report.loc[n_steps, 'port_val'] - port_liq_tax
     sim_stats['port_irr'] = im.irr_solve(cf, params['dt'], ann_factor=config.ANN_FACTOR,
-                                         bounds=(-0.05, 0.2))[0]
-    # Convert to annual from continuous
-    sim_stats['port_irr'] = (np.exp(sim_stats['port_irr'] / freq) - 1) * freq
+                                         # bounds=(-0.05, 0.2), freq=freq)
+                                         bounds=(-0.5, 0.5), freq=None)
+
+    # Adjust to match EMBA calculation with 252 days for discounting
+    sim_stats['idx_irr'] *= config.EMBA_IRR_Factor
+    sim_stats['port_irr'] *= config.EMBA_IRR_Factor
 
     # Calculate aggregate statistics
     hvst_grs = df_report['hvst_grs'].sum()
     hvst_net = df_report['hvst_net'].sum()
     hvst_potl = df_report['hvst_potl'].sum()
 
-    ratio_grs = hvst_grs / hvst_potl
-    ratio_net = hvst_net / hvst_potl
+    if hvst_potl > 0:
+        ratio_grs = hvst_grs / hvst_potl
+        ratio_net = hvst_net / hvst_potl
+    else:
+        ratio_grs = ratio_net = np.nan
+
     tracking_std = df_report['tracking'].dropna().std()
     if tracking_std >= config.tol:
         hvst_n_2_trk_ann = (hvst_net / years) / (tracking_std * np.sqrt(freq))
     else:
         hvst_n_2_trk_ann = np.nan
 
-    idx_ann_ret = ((df_report.iloc[-1]['bmk_val'] / df_report.iloc[0]['bmk_val']) ** (1 / n_steps) - 1) * freq
-    port_ann_ret = ((df_report.iloc[-1]['port_val'] / df_report.iloc[0]['port_val']) ** (1 / n_steps) - 1) * freq
+    # idx_ann_ret = ((df_report.iloc[-1]['bmk_val'] / df_report.iloc[0]['bmk_val']) ** (1 / n_steps) - 1) * freq
+    # port_ann_ret = ((df_report.iloc[-1]['port_val'] / df_report.iloc[0]['port_val']) ** (1 / n_steps) - 1) * freq
+    # sim_stats['port_pretax_ret'] = port_ann_ret
+    # sim_stats['index_pretax_ret'] = idx_ann_ret
 
     # Pack results into a datframe:
-    sim_stats['port_pretax_ret'] = port_ann_ret
-    sim_stats['index_pretax_ret'] = idx_ann_ret
     sim_stats['index_vol'] = df_report['bmk_val'].pct_change().std() * np.sqrt(freq)
     sim_stats['tracking_std'] = tracking_std * np.sqrt(freq)
     sim_stats['hvst_grs'] = hvst_grs / years
@@ -693,8 +768,8 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
     sim_stats['port_liq_tax%'] = port_liq_tax / df_report.iloc[-1]['port_val']
 
     # Re-arrange sim_stats fields in logical order
-    new_order = ['idx_irr', 'port_irr', 'tax_alpha', 'tax_sr', 'port_pretax_ret',
-                 'index_pretax_ret', 'index_vol', 'tracking_std', 'hvst_grs', 'hvst_net',
+    new_order = ['idx_irr', 'port_irr', 'tax_alpha', 'tax_sr', 'index_vol',
+                 'tracking_std', 'hvst_grs', 'hvst_net',
                  'hvst_potl', 'hvst_grs/potl', 'hvst_net/potl', 'hvst_n/trckng',
                  'idx_liq_tax%', 'port_liq_tax%']
 
@@ -713,8 +788,15 @@ def trade_history(sim_hist: list, sim_data: dict, shares_flag: bool = False) -> 
     n_times = len(sim_hist)
     tickers = sim_hist[0]['opt']['opt_trades'].index
     df_trades = pd.DataFrame(0, index=range(n_times), columns=tickers)
+
     for i in range(n_times):
-        df_trades.loc[i, :] = sim_hist[i]['opt']['opt_trades']
+        if sim_data['params']['algorithm'] != 'inst_replace':
+            df_trades.loc[i, :] = sim_hist[i]['opt']['opt_trades']
+        elif i == 0:
+            df_trades.loc[i, :] = sim_hist[i]['opt']['opt_trades']
+        else:
+            # If we are instantly replacing these are not 'real trades', but we report them anyway
+            df_trades.loc[i, :] = sim_hist[i]['opt']['harvest_trades']
 
         if not shares_flag:
             df_trades.loc[i, :] *= sim_data['px'].loc[i, :]
@@ -741,8 +823,6 @@ def pd_to_csv(df: Union[pd.DataFrame, pd.Series], file_code: str, suffix: str = 
 
 def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
             verbose: bool = True, save_files: bool = True, log_file: str = None) -> tuple:
-
-
     # For timing
     timer_on = True
     if timer_on:
@@ -754,7 +834,7 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
 
     try:
         n_steps = int(params['n_steps'])
-    except KeyError:
+    except (KeyError, TypeError):
         try:
             n_steps = len(inputs['d_px']) - 1
         except KeyError:
@@ -772,7 +852,7 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     # Depending on prices source, process the data differntly
     # later, it may be a good idea to merge these functions into one.
     if inputs.get('prices_from_pickle', False):
-        sim_data = process_input_data_from_pickle(inputs, return_override=return_override)
+        sim_data = process_input_data_from_pickle(inputs)
     else:
         sim_data = process_input_data_from_xl(inputs, return_override=return_override)
 
@@ -802,16 +882,20 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
 
         # Take account of the dividends that we have received during the period
         # Assume that all divs during the period happen on the last day (i.e. stocks are ex-div)
-        port.cash += port_divs_during_period(port, t, sim_data)
+        div = port_divs_during_period(port, t, sim_data) * (1 - config.tax['div'])
+        if not params.get('div_payout', True):
+            port.cash += div
+            div = 0
 
         # Revalue portfolio
         port.update_sim_data(sim_data=sim_data, t=t)
         logging.info("\nBefore rebalance:")
         log_port_report(port, t)
 
-        if timer_on: tic  = time.perf_counter()
-        # Work out the optimal rebalance (for now use heuristic)
-        if algorithm == 'optimizer':
+        if timer_on: tic = time.perf_counter()
+        if algorithm == 'inst_replace':
+            opt_res = port.harvest_inst_replace(t, sim_data)
+        elif algorithm == 'optimizer':
             opt_res = opt_rebalance(port, t, sim_data, max_harvest, log_file=log_file)
         else:
             opt_res = heuristic_rebalance(port, t, sim_data, max_harvest)
@@ -822,6 +906,9 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
 
         logging.info("Trades:")
         logging.info(opt_res['opt_trades'])
+        if algorithm == 'inst_replace':
+            logging.info("\nHarvest:")
+            logging.info(opt_res['harvest_trades'])
         logging.info(f"\nHarvest={opt_res['harvest']:.4f}, "
                      f"Potl Harvest={opt_res['potl_harvest']:.4f}, "
                      f"Ratio={opt_res['harv_ratio']:.3f}")
@@ -845,8 +932,10 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
         else:
             clock_reset_tax = 0
 
-        sim_hist.append({'opt': opt_res, 'rebal': rebal_res, 'donate': donate_amount,
+        sim_hist.append({'opt': opt_res, 'div': div, 'rebal': rebal_res, 'donate': donate_amount,
                          'clock_reset_tax': clock_reset_tax})
+
+        print(f"Harvest: {opt_res['harvest']}, Reset: {clock_reset_tax}")
 
     # Liauidation tax at the end
     if params['final_liquidation'] > 0:
@@ -874,7 +963,6 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     if timer_on:
         print(f"Timer: in opt: {t_in_opt:.2f}, in rebal: {t_in_rebal:.2f} sec")
 
-
     return sim_stats, df_report
 
 
@@ -893,9 +981,10 @@ if __name__ == "__main__":
                         format='%(message)s')
     # Run simulation
     input_file = 'inputs/test100.xlsx'
-    inputs = load_sim_settings_from_file(input_file, randomize=True)
+    inputs = load_sim_settings_from_file(input_file, randomize=False)
 
     # tic = time.perf_counter()
+
     sim_stats, step_report = run_sim(inputs, suffix=timestamp)
     # toc = time.perf_counter()
     print("\nTrade Summary (x100, %):")

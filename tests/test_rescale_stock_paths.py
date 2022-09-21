@@ -147,6 +147,7 @@ def test_rescale_no_vol_scaling(idx_data):
 
 
 def test_rescale_no_level_scaling(idx_data):
+
     dp0, w0 = idx_data
     d_px = np.array(dp0)
     w = np.array(w0)
@@ -175,4 +176,80 @@ def test_rescale_no_level_scaling(idx_data):
     np.testing.assert_allclose(exp_d_px, d_px_adj, atol=1e-6)
     np.testing.assert_allclose(exp_idx_rets, idx_rets_adj, atol=1e-6)
 
+
+def test_calc_path_stats_w_defaults(idx_data):
+
+    # Generate data
+    dp0, w0 = idx_data
+    d_px = np.array(dp0)
+    w = np.array(w0)
+
+    idx_ann_vol = 0.15
+    stk_res_vol_factor = 2.0
+    ann_factor = 2.0
+
+    d_px_adj, idx_rets_adj = rsp.rescale_stocks_to_match_idx(
+        d_px, w,
+        idx_ann_vol=idx_ann_vol,
+        stk_res_vol_factor=stk_res_vol_factor,
+        ann_factor=ann_factor)
+
+    # Calculate moments of the data
+    idx_ret, idx_vol, resid_vol = rsp.calc_path_stats(1, d_px_adj, w,
+                                        vol_fixed_w=False, ann_factor=ann_factor)
+    assert pt.approx(idx_ret, abs=1e-6) == 0.069063
+    assert pt.approx(idx_vol, abs=1e-6) == 0.15
+
+
+def test_calc_path_stats_w_res_vol(idx_data):
+    # Generate data
+    dp0, w0 = idx_data
+    d_px = np.array(dp0)
+    w = np.array(w0)
+
+    idx_ann_vol = 0.15
+    stk_res_vol_factor = 2.0
+    ann_factor = 2.0
+
+    d_px_adj, idx_rets_adj = rsp.rescale_stocks_to_match_idx(
+        d_px, w,
+        idx_ann_vol=idx_ann_vol,
+        stk_res_vol_factor=stk_res_vol_factor,
+        ann_factor=ann_factor)
+
+    # Calculate moments of the data
+    idx_ret, idx_vol, resid_vol = rsp.calc_path_stats(1, d_px_adj, w,
+                                        vol_fixed_w=False,
+                                        calc_res_vol=True,
+                                        ann_factor=ann_factor)
+
+    assert pt.approx(idx_ret, abs=1e-6) == 0.069063
+    assert pt.approx(idx_vol, abs=1e-6) == 0.15
+    assert pt.approx(resid_vol, abs=1e-6) == 0.4016428
+
+
+def test_calc_path_stats_vol_fixed_shr(idx_data):
+    # Generate data
+    dp0, w0 = idx_data
+    d_px = np.array(dp0)
+    w = np.array(w0)
+
+    idx_ann_vol = 0.15
+    stk_res_vol_factor = 2.0
+    ann_factor = 2.0
+
+    d_px_adj, idx_rets_adj = rsp.rescale_stocks_to_match_idx(
+        d_px, w,
+        idx_ann_vol=idx_ann_vol,
+        stk_res_vol_factor=stk_res_vol_factor,
+        ann_factor=ann_factor)
+
+    # Calculate moments of the data
+    idx_ret, idx_vol, resid_vol = rsp.calc_path_stats(1, d_px_adj, w,
+                                        vol_fixed_w=True,
+                                        calc_res_vol=True,
+                                        ann_factor=ann_factor)
+
+    assert pt.approx(idx_ret, abs=1e-6) == 0.069063
+    assert pt.approx(idx_vol, abs=1e-6) == 0.153314
 

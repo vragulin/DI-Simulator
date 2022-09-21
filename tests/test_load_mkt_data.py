@@ -7,7 +7,7 @@ import numpy as np
 import os
 import pytest as pt
 
-from load_mkt_data import load_mkt_data
+from load_mkt_data import load_mkt_data, process_mkt_data
 
 
 def varname(p):
@@ -98,3 +98,20 @@ def test_rand_weights_set_rand_seed(inputs):
     w1 /= w1.sum()
     np.testing.assert_array_almost_equal(w[1, :3], w1[:3], decimal=6)
 
+@pt.fixture
+def inp_data(inputs):
+
+    data_files, dt, filter_params = inputs
+    rand_seed = 7
+
+    # Test without randomization
+    data_dict = load_mkt_data(data_files, dt, filter_params=filter_params,
+                              rand_seed=rand_seed)
+
+    return data_dict, dt
+
+def test_process_mkt_data_no_change(inp_data):
+
+    data_dict, dt = inp_data
+    stats = process_mkt_data(data_dict, dt)
+    assert False

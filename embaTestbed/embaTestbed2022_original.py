@@ -44,6 +44,7 @@ def load_data(data_freq: int, data_dict={}, replace=False, randomize=False, retu
     if randomize:
         # find stocks present for the entire sample and pull out everything else
         full_indic = np.sum((out_dict['px'].to_numpy() > 0), axis=0) == len(out_dict['px'].index)
+        # TODO save index before resetting it - this way I can replicate the paths in the future
         d_px = out_dict['d_px'].iloc[:, full_indic].sample(frac=1, replace=replace).reset_index(drop=True)
         rand_weights = np.exp(np.random.normal(size=(1, d_px.shape[1])))
         rand_weights /= np.sum(rand_weights)
