@@ -2,6 +2,7 @@
     Direct index / tax harvesting simulation.  Based on James's embaTestbed2022.py.
     by V. Ragulin, started 3-Aug-2022
 """
+import copy
 import os
 import warnings
 import numpy as np
@@ -22,6 +23,7 @@ from obj_function import obj_func_w_lots, fetch_obj_params, tax_lots
 from gen_random import gen_rand_returns
 from pretty_print import df_to_format
 from simulator_class import Simulator
+from load_mkt_data import vectorize_dict
 
 pd.options.display.float_format = '{:,.4f}'.format
 
@@ -77,7 +79,7 @@ def process_input_data_from_pickle(inputs: dict) -> dict:
     # Prices and changes - normalized to start from 1.0
     d_px = inputs['d_px']
     d_tri = inputs['d_tri']
-    w = inputs['w']
+    w_arr = inputs['w_arr']
 
     px = (1 + d_px).cumprod()
     tri = (1 + d_tri).cumprod()
@@ -88,15 +90,15 @@ def process_input_data_from_pickle(inputs: dict) -> dict:
         div[(div.index % freq == 0) & (div.index > 0)] = params['div_override']
 
     if inputs['params']['benchmark_type'] == 'fixed_weights':
-        idx_vals = (1 + (d_px * w).sum(axis=1)).cumprod()
-        idx_tri = (1 + (d_tri * w).sum(axis=1)).cumprod()
-        idx_div = (div * w).sum(axis=1)
-    else:
-        idx_vals = im.index_vals(w, px.values)
+        idx_vals = (1 + (d_px * w_arr).sum(axis=1)).cumprod()
+        idx_tri = (1 + (d_tri * w_arr).sum(axis=1)).cumprod()
+        idx_div = (div * w_arr).sum(axis=1)
+    else:  # Fixed share index - basket does not change
+        idx_vals = im.index_vals(w_arr[0], px.values)
         idx_div = np.zeros(idx_vals.shape)
-        idx_div[1:] = (div.values[1:] * px.values[:-1]) @ w
+        idx_div[1:] = (div.values[1:] * px.values[:-1]) @ w_arr[0]
 
-        idx_tri = im.total_ret_index(w, px.values, idx_div,
+        idx_tri = im.total_ret_index(w_arr[0], px.values, idx_div,
                                      idx_vals=idx_vals)
 
     # Calculate portfolio review dates
@@ -104,10 +106,12 @@ def process_input_data_from_pickle(inputs: dict) -> dict:
 
     # Pack results into an output structure
     out_dict = {'tickers': tickers, 'px': px, 'd_px': d_px, 'tri': tri, 'd_tri': d_tri,
-                'div': div.values, 'w': w, 'idx_div': idx_div,
+                'div': div.values, 'w': inputs['w'], 'idx_div': idx_div,
                 'idx_vals': idx_vals, 'idx_tri': idx_tri,
                 'dates': dates, 'tax': config.tax,
                 'params': params, 'trx_cost': config.trx_cost}
+
+    vectorize_dict(out_dict, ['px', 'd_px', 'tri', 'd_tri', 'div', 'w'])
 
     return out_dict
 
@@ -235,7 +239,7 @@ def port_divs_during_period(port: PortLots, t: int, sim_data: dict) -> float:
     params = sim_data['params']
     n_stocks = sim_data['div'].shape[1]
 
-    if True: #params['div_override'] < 0:
+    if True:  # params['div_override'] < 0:
         stock_divs = sim_data['div'][t, :]
         prices = sim_data['px'].values[t - 1, :]
     else:
@@ -470,6 +474,7 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
     # Add info on over/underweight stocks
     df_lots['w_actv'] = df_lots['ticker'].apply(lambda x: df_stocks.loc[x, 'w_actv'])
     # TODO - explore if this can be done quicker with numpy smart indexing via fast_lot_math
+
     df_lots['overweight'] = df_lots['w_actv'] > 0
     df_lots['mv'] = df_lots['price'] * df_lots['shares']
 
@@ -538,6 +543,7 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
     df_stocks.loc[df_stocks.index[0], 'buy_mv'] = df_stocks.loc[df_stocks.index[0], 'cum_buy_mv']  # fill first element
 
     # If we have not bought enough, spread the shortfall across all remaining 'to buy' stocks
+    #TODO - make sure that stocks with zero positions are included into 'to buy' stocks
     shortfall = tot_mv_to_buy - df_stocks['buy_mv'].sum()
     if shortfall > 0:
         n_buys = (1 - df_stocks['to_sell']).sum()
@@ -750,6 +756,9 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
 
     # Pack results into a datframe:
     sim_stats['index_vol'] = df_report['bmk_val'].pct_change().std() * np.sqrt(freq)
+    sim_stats['stk_vol_wavg'] = im.stock_vol_avg(sim_data['d_px'].values,
+                                                 sim_data['w_arr'][0],
+                                                 params['dt'] / config.LT_TAX_DAYS)
     sim_stats['tracking_std'] = tracking_std * np.sqrt(freq)
     sim_stats['hvst_grs'] = hvst_grs / years
     sim_stats['hvst_net'] = hvst_net / years
@@ -769,7 +778,7 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
 
     # Re-arrange sim_stats fields in logical order
     new_order = ['idx_irr', 'port_irr', 'tax_alpha', 'tax_sr', 'index_vol',
-                 'tracking_std', 'hvst_grs', 'hvst_net',
+                 'stk_vol_wavg', 'tracking_std', 'hvst_grs', 'hvst_net',
                  'hvst_potl', 'hvst_grs/potl', 'hvst_net/potl', 'hvst_n/trckng',
                  'idx_liq_tax%', 'port_liq_tax%']
 
@@ -876,8 +885,8 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     for t in range(1, n_steps + 1):
 
         if verbose:
-            if t % 25 == 0:
-                print(f"Step = {t}", end=", ")
+            if t % 50 == 0:
+                print(f"Step = {t}", end=",\t")
                 print(f"# lots: {len(port.df_lots)}")
 
         # Take account of the dividends that we have received during the period
@@ -935,7 +944,7 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
         sim_hist.append({'opt': opt_res, 'div': div, 'rebal': rebal_res, 'donate': donate_amount,
                          'clock_reset_tax': clock_reset_tax})
 
-        print(f"Harvest: {opt_res['harvest']}, Reset: {clock_reset_tax}")
+        # print(f"Harvest: {opt_res['harvest']}, Reset: {clock_reset_tax}")
 
     # Liauidation tax at the end
     if params['final_liquidation'] > 0:

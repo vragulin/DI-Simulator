@@ -11,6 +11,19 @@ import config as cnf
 from rescale_stock_paths import rescale_stocks_to_match_idx
 
 
+def vectorize_dict(data_dict: dict, fields: list) -> None:
+    """ Add fields *_arr that are numpy arrays for a data dict in place
+    :params data_dict:  original data_dict
+    :params fields:  list (or other iterable) of fields to vectorize
+    """
+    for k in fields:
+        try:
+            if isinstance(data_dict[k], pd.DataFrame):
+                data_dict[k + '_arr'] = data_dict[k].to_numpy()
+            else:
+                data_dict[k + '_arr'] = data_dict[k]
+        except KeyError:
+            raise KeyError(f"Field {k} not in data_dict.")
 
 
 def process_mkt_data(input: dict, data_freq: int, randomize: bool = False,
@@ -45,8 +58,6 @@ def process_mkt_data(input: dict, data_freq: int, randomize: bool = False,
 
         :return: dictionary with moments (mean, std, resid vol etc.) of the rescaled paths
     """
-
-
 
     pass
 
@@ -135,7 +146,7 @@ def load_mkt_data(data_files: dict, data_freq: int, filter_params: Optional[dict
     if fixed_weights:
         weights = np.ones((n_steps + 1, 1)) @ w
     else:  # fixed shares
-        weights = im.index_weights_over_time(w.values, px.values)
+        weights = im.index_weights_over_time(w.values[0], px.values)
 
     df_w = pd.DataFrame(weights, index=px.index, columns=px.columns)
 

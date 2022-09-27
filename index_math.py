@@ -6,6 +6,8 @@ from typing import Optional, Union
 from scipy.optimize import minimize
 from numba import njit
 
+# Throw errors instead of warnings
+np.seterr('raise')
 
 # @njit
 def index_avg_return(shares: np.array, prices: np.array) -> float:
@@ -148,10 +150,6 @@ def rescale_frame_vol(d_px: np.array, vol_mult: float = 1,
     return (s1 * adj_factor) - 1
 
 
-
-
-
-
 # @njit
 def irr_obj(r: float, cf: np.array, dt: int,
             ann_factor: float = 252) -> float:
@@ -181,7 +179,7 @@ def irr_solve(cf: np.array, dt: int, ann_factor: float = 252, guess: float = 0.0
         return (np.exp(r[0] / freq) - 1) * freq
 
 
-#@njit
+# @njit
 def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: Optional[np.array],
                   dt: int, ann_factor: float = 252, tax_lt: float = 0.28,
                   tax_st: float = 0.5, div_payout: bool = True) -> float:
@@ -257,3 +255,22 @@ def index_irr(dt: int, idx_start: Union[float, np.ndarray], idx_end: Union[float
     irr = irr_solve(cf, dt, ann_factor=ann_factor, guess=guess, bounds=bounds, freq=freq)
 
     return irr
+
+
+def stock_vol_avg(d_px: np.array, w0: np.array, dt: float) -> float:
+    """ Calculate weighted average individual stock vol
+    for a fixed-share index
+    :param d_px: array of price % changes (n_steps+1, n_stocks)
+    :param w0: array of initial weights (n_stocks), assume weights
+                evolve with share prices
+    :param dt: length of a time step in years
+    :return: weighted average vol of stocks in the index
+    """
+
+    # Vols of individual stocks
+    assert np.abs(dt) > np.finfo(float).eps, "Invalid time step, dt=0"
+
+    stk_vols = np.log(1+d_px[1:, :]).std(axis=0) / np.sqrt(dt)
+    vol_avg = stk_vols @ w0
+
+    return vol_avg

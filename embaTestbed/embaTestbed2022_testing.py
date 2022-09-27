@@ -5,35 +5,16 @@ import os
 import copy
 import time
 import pickle
+import emba_config as cnf
 
 np.seterr('raise')
-
-# Passive Inputs
-# working_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/test_data_10/"
-# PX_PICKLE = "prices.pickle"
-# TR_PICKLE = "t_rets.pickle"
-# W_PICKLE = "daily_w.pickle"
-
-# Which dataset to use - clean (if True) or full (if False)
-clean_flag = False
-
-if clean_flag:
-    working_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp_clean/"
-else:
-    working_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp/"
-PX_PICKLE = "idx_prices.pickle"
-TR_PICKLE = "idx_t_rets.pickle"
-W_PICKLE = "idx_daily_w.pickle"
-
-
-# Active Inputs
-
 
 # EMBA standalone sandbox
 def load_data(data_freq: int, data_dict={}, replace=False, randomize=False, return_override=0,
               vol_override=0, rand_state=0) -> dict:
+
     if not len(data_dict):
-        px = pd.read_pickle(os.path.join(working_dir, PX_PICKLE)).fillna(method='ffill').fillna(0)
+        px = pd.read_pickle(os.path.join(cnf.working_dir, cnf.PX_PICKLE)).fillna(method='ffill').fillna(0)
 
         # Patch -- Need to save dates for downstream simulations
         dates = px.index
@@ -42,11 +23,11 @@ def load_data(data_freq: int, data_dict={}, replace=False, randomize=False, retu
         px.index = range(0, len(px.index))
         px = px.reindex(index=range(0, len(px.index), data_freq))
 
-        tri = pd.read_pickle(os.path.join(working_dir, TR_PICKLE)).fillna(method='ffill').fillna(0)
+        tri = pd.read_pickle(os.path.join(cnf.working_dir, cnf.TR_PICKLE)).fillna(method='ffill').fillna(0)
         tri.index = range(0, len(tri.index))
         tri = tri.reindex(index=range(0, len(tri.index), data_freq))
 
-        w = pd.read_pickle(os.path.join(working_dir, W_PICKLE)).fillna(0)
+        w = pd.read_pickle(os.path.join(cnf.working_dir, cnf.W_PICKLE)).fillna(0)
         w.index = range(0, len(w.index))
         w = np.maximum(0, w.reindex(index=range(0, len(w.index), data_freq)))
         w /= (np.sum(w.to_numpy(), axis=1)[:, None] @ np.ones((1, len(w.columns))))
@@ -135,6 +116,11 @@ def load_data(data_freq: int, data_dict={}, replace=False, randomize=False, retu
         out_dict['d_px'] = d_px
         out_dict['div'] = out_dict['div'].iloc[:, full_indic]
         out_dict['px'] = out_dict['px'].iloc[:, full_indic]  # NB - prices are not reshuffled
+
+    else:
+        # Create a trivial shuffle  array even there
+        # is no randomization
+        out_dict['shuffle'] = out_dict['d_px'].index
 
     # Vectorize
     for k in ('px', 'd_px', 'd_tri', 'div', 'w'):
@@ -284,7 +270,7 @@ def run_sim_path(data_dict: dict, inputs: dict) -> dict:
     px = data_dict['px_arr']
     dpx = data_dict['d_px_arr']
     div = data_dict['div_arr']
-    n_t = w.shape[0]
+    n_t = px.shape[0]
 
     # Go through time
     cf = np.zeros(n_t)  # [Time]
@@ -332,7 +318,7 @@ def run_sim_path(data_dict: dict, inputs: dict) -> dict:
             cash = 0
 
         # Donate
-        if inputs['dt'] * t % inputs['donate_freq'] == 0 and inputs['donate']:
+        if inputs['dt'] * t % inputs['donate_freq'] == 0 and inputs['donate'] and (donate_pct > np.finfo(float).eps):
             (basis, lot_start) = update_donate(t, mv, basis, lot_start, inputs['donate_thresh'], donate_pct)
 
     # Calc IRR
@@ -345,20 +331,6 @@ def run_sim_path(data_dict: dict, inputs: dict) -> dict:
 
     return irr, harvest
 
-
-# def run_sim_vr(inputs: dict) -> float:
-#     N = inputs['N_sim']
-#     irr = np.zeros(N)
-#     print("Testing path moments:")
-#     base_data_dict = load_data(inputs['dt'], replace=False, randomize=False, return_override=-1, vol_override=-1)
-#     for n in range(0, N):
-#         data_dict = load_data(inputs['dt'], replace=inputs['replace'], randomize=inputs['randomize'],
-#                               data_dict=base_data_dict, return_override=inputs['return_override'],
-#                               vol_override=inputs['vol_override'])
-#         irr[n] = run_sim_path(data_dict, inputs)
-#     mean_irr = float(np.mean(irr))
-#
-#     return mean_irr
 
 def run_sim(inputs: dict) -> tuple:
     N = inputs['N_sim']
@@ -383,7 +355,7 @@ def run_sim(inputs: dict) -> tuple:
         # noinspection PyUnboundLocalVariable
         path_shuffles[n] = data_dict['shuffle']
         # noinspection PyUnboundLocalVariable
-        path_weights[n] = data_dict['w'][0, :]
+        path_weights[n] = data_dict['w_arr'][0, :]
 
         # ------------------------
         # VR patch - flag is vol is too high, and replace with average
@@ -420,7 +392,7 @@ def run_sim(inputs: dict) -> tuple:
             code_string = ""
 
         code_string += f"_{inputs['dt']}"
-        data_dir = '../data/paths'
+        data_dir = cnf.PATHS_DIR
         pd.DataFrame(path_shuffles, index=range(N), columns=range(n_steps + 1)
                      ).to_csv(f"{data_dir}/path_shuffles{code_string}.csv")
         pd.DataFrame(path_weights, index=range(N), columns=base_data_dict['px'].columns
@@ -434,12 +406,12 @@ def run_sim(inputs: dict) -> tuple:
 def run_scenario_vr(inputs: dict, only_base: bool = False):
     res_dir = '../results/emba/'
 
-    # inputs['harvest'] = 'none'
-    inputs['harvest'] = 'reset'  # The program only checks that harvest!='none'
-    inputs['clock_reset'] = True
+    inputs['harvest'] = 'none'
+    # inputs['harvest'] = 'reset'  # The program only checks that harvest!='none'
+    inputs['clock_reset'] = False
     irr, _ = run_sim(inputs)
-    print('Std Harvest: {}'.format(irr))
-    # print('No Harvest: {}'.format(irr))
+    # print('Std Harvest: {}'.format(irr))
+    print('No Harvest: {}'.format(irr))
 
     if not only_base:
         # Don't save the paths again - they are the same
@@ -508,7 +480,7 @@ def run_scenario(inputs: dict):
 
 def run_scenario_hypercube(inputs: dict):
     dir_path = "../results/emba/"
-    if clean_flag:
+    if cnf.clean_flag:
         fcode = 'clean'
     else:
         fcode = 'full'
@@ -573,250 +545,6 @@ def run_scenario_hypercube(inputs: dict):
     print("Done")
 
 
-# Build inputs
-test = {'dt': 60,
-        'tau_div_start': 0.0,
-        'tau_div_end': 0.0,
-        'tau_st_start': 0.0,
-        'tau_st_end': 0.0,
-        'tau_lt_start': 0.0,
-        'tau_lt_end': 0.0,
-        'donate_start_pct': 0.05,
-        'donate_end_pct': 0.05,
-        'div_reinvest': False,
-        'div_payout': True,
-        'div_override': 0.02,
-        'harvest': 'none',
-        'harvest_thresh': -0.02,
-        'harvest_freq': 60,
-        'clock_reset': False,
-        'rebal_freq': 60,
-        'donate_freq': 1200,
-        'donate_thresh': 0.0,
-        'terminal_donation': 0,
-        'donate': True,
-        'replace': True,
-        'randomize': True,
-        'return_override': 0.09,
-        'N_sim': 10,
-        'savings_reinvest_rate': -1,
-        'loss_offset_pct': 1,
-        'vol_override': -1,
-        'save_path_info': True
-        }
-
-scenario1 = {
-    'dt': 60,
-    'tau_div_start': 0.28,
-    'tau_div_end': 0.28,
-    'tau_st_start': 0.5,
-    'tau_st_end': 0.5,
-    'tau_lt_start': 0.28,
-    'tau_lt_end': 0.28,
-    'donate_start_pct': 0.2,
-    'donate_end_pct': 0.2,
-    'div_reinvest': False,
-    'div_payout': True,
-    'div_override': -1,
-    'harvest': 'none',
-    'harvest_thresh': -0.02,
-    'harvest_freq': 60,
-    'clock_reset': False,
-    'rebal_freq': 240,
-    'donate_freq': 240 * 5,
-    'donate_thresh': 0.0,
-    'terminal_donation': 0,
-    'donate': True,
-    'replace': False,
-    'randomize': False,
-    'return_override': -1,
-    'N_sim': 1,
-    'savings_reinvest_rate': -1,
-    'loss_offset_pct': 1,
-}
-
-scenario2 = {'dt': 60,
-             'tau_div_start': 0.28,
-             'tau_div_end': 0.20,
-             'tau_st_start': 0.5,
-             'tau_st_end': 0.35,
-             'tau_lt_start': 0.28,
-             'tau_lt_end': 0.20,
-             'donate_start_pct': 0.2,
-             'donate_end_pct': 0.2,
-             'div_reinvest': False,
-             'div_payout': True,
-             'div_override': 0.02,
-             'harvest': 'none',
-             'harvest_thresh': -0.02,
-             'harvest_freq': 60,
-             'clock_reset': False,
-             'rebal_freq': 240,
-             'donate_freq': 240 * 5,
-             'donate_thresh': 0.0,
-             'terminal_donation': 0.5,
-             'donate': True,
-             'replace': True,
-             'randomize': True,
-             'return_override': 0.05,
-             'N_sim': 50,
-             'savings_reinvest_rate': -1,
-             'loss_offset_pct': 1,
-             }
-
-scenario3 = {'dt': 60,
-             'tau_div_start': 0.28,
-             'tau_div_end': 0.38,
-             'tau_st_start': 0.5,
-             'tau_st_end': 0.6,
-             'tau_lt_start': 0.28,
-             'tau_lt_end': 0.38,
-             'donate_start_pct': 0.3,
-             'donate_end_pct': 0.3,
-             'div_reinvest': False,
-             'div_payout': True,
-             'div_override': 0.02,
-             'harvest': 'none',
-             'harvest_thresh': -0.02,
-             'harvest_freq': 60,
-             'clock_reset': False,
-             'rebal_freq': 240,
-             'donate_freq': 240,
-             'donate_thresh': 0.0,
-             'terminal_donation': 0,
-             'donate': True,
-             'replace': False,
-             'randomize': False,
-             'return_override': -1,
-             'N_sim': 1,
-             'savings_reinvest_rate': 0.1,
-             'loss_offset_pct': 1,
-             }
-
-scenario4 = {'dt': 60,
-             'tau_div_start': 0.28,
-             'tau_div_end': 0.20,
-             'tau_st_start': 0.5,
-             'tau_st_end': 0.35,
-             'tau_lt_start': 0.28,
-             'tau_lt_end': 0.20,
-             'donate_start_pct': 0.1,
-             'donate_end_pct': 0.1,
-             'div_reinvest': False,
-             'div_payout': True,
-             'div_override': 0.02,
-             'harvest': 'none',
-             'harvest_thresh': -0.02,
-             'harvest_freq': 60,
-             'clock_reset': False,
-             'rebal_freq': 240,
-             'donate_freq': 240,
-             'donate_thresh': 0.0,
-             'terminal_donation': 1,
-             'donate': True,
-             'replace': True,
-             'randomize': True,
-             'return_override': 0.05,
-             'N_sim': 50,
-             'savings_reinvest_rate': -1,
-             'loss_offset_pct': 0.75,
-             }
-
-scenario5 = {'dt': 60,
-             'tau_div_start': 0.28,
-             'tau_div_end': 0.38,
-             'tau_st_start': 0.5,
-             'tau_st_end': 0.6,
-             'tau_lt_start': 0.28,
-             'tau_lt_end': 0.38,
-             'donate_start_pct': 0.50,
-             'donate_end_pct': 0.50,
-             'div_reinvest': False,
-             'div_payout': True,
-             'div_override': 0.02,
-             'harvest': 'none',
-             'harvest_thresh': -0.02,
-             'harvest_freq': 60,
-             'clock_reset': False,
-             'rebal_freq': 240,
-             'donate_freq': 240,
-             'donate_thresh': 0.0,
-             'terminal_donation': 0,
-             'donate': True,
-             'replace': True,
-             'randomize': True,
-             'return_override': 0.05,
-             'N_sim': 50,
-             'savings_reinvest_rate': 0.1,
-             'loss_offset_pct': 1,
-             }
-
-scen_cube_test = {'dt': 20,
-                  'tau_div_start': 0.28,
-                  'tau_div_end': 0.28,
-                  'tau_st_start': 0.5,
-                  'tau_st_end': 0.5,
-                  'tau_lt_start': 0.28,
-                  'tau_lt_end': 0.28,
-                  'donate_start_pct': 0.05,
-                  'donate_end_pct': 0.05,
-                  'div_reinvest': False,
-                  'div_payout': True,
-                  'div_override': 0.02,
-                  'harvest': 'none',
-                  'harvest_thresh': -0.02,
-                  'harvest_freq': 20,
-                  'clock_reset': True,
-                  'rebal_freq': 20,
-                  'donate_freq': 240 * 5,
-                  'donate_thresh': 0.0,
-                  'terminal_donation': 0,
-                  'donate': False,
-                  'replace': True,
-                  'randomize': True,
-                  'return_override': 0.09,
-                  'N_sim': 2,
-                  'savings_reinvest_rate': -1,
-                  'loss_offset_pct': 1,
-                  'vol_override': -1,
-                  'save_path_info': False
-                  }
-scenario1_cube = {'dt': 60,
-                  'tau_div_start': 0.28,
-                  'tau_div_end': 0.28,
-                  'tau_st_start': 0.5,
-                  'tau_st_end': 0.5,
-                  'tau_lt_start': 0.28,
-                  'tau_lt_end': 0.28,
-                  'donate_start_pct': 0.2,
-                  'donate_end_pct': 0.2,
-                  'div_reinvest': False,
-                  'div_payout': True,
-                  'div_override': 0.02,
-                  'harvest': 'none',
-                  'harvest_thresh': -0.02,
-                  'harvest_freq': 60,
-                  'clock_reset': False,
-                  'rebal_freq': 60,
-                  'donate_freq': 240 * 5,
-                  'donate_thresh': 0.0,
-                  'terminal_donation': 0,
-                  'donate': True,
-                  'replace': True,
-                  'randomize': True,
-                  'return_override': -1,
-                  'N_sim': 100,
-                  'savings_reinvest_rate': -1,
-                  'loss_offset_pct': 1,
-                  'vol_override': -1,
-                  'save_path_info': False
-                  }
-
-
-# test_catch_float = scenario1_cube.copy()
-# test_catch_float['return_override'] = 0.03
-# test_catch_float['vol_override'] = 0.2
-
 def run_test_one_path(inputs):
     only_base = False
     base_scenario = inputs.copy()
@@ -854,20 +582,267 @@ def run_test_one_path(inputs):
 # run_scenario(test_catch_float)
 # run_test_one_path(scen_cube_test)
 
-print('*** Run Hypercube Batch ***')
-run_scenario_hypercube(scenario1_cube)
-#
-# print('*** Scenario 1 ***')
-# run_scenario(scenario1)
-#
-# print('*** Scenario 2 ***')
-# run_scenario(scenario2)
-#
-# print('*** Scenario 3 ***')
-# run_scenario(scenario3)
-#
-# print('*** Scenario 4 ***')
-# run_scenario(scenario4)
-#
-# print('*** Scenario 5 ***')
-# run_scenario(scenario5)
+
+if __name__ == "__main__":
+    # Build inputs
+    test = {'dt': 60,
+            'tau_div_start': 0.0,
+            'tau_div_end': 0.0,
+            'tau_st_start': 0.0,
+            'tau_st_end': 0.0,
+            'tau_lt_start': 0.0,
+            'tau_lt_end': 0.0,
+            'donate_start_pct': 0.05,
+            'donate_end_pct': 0.05,
+            'div_reinvest': False,
+            'div_payout': True,
+            'div_override': 0.02,
+            'harvest': 'none',
+            'harvest_thresh': -0.02,
+            'harvest_freq': 60,
+            'clock_reset': False,
+            'rebal_freq': 60,
+            'donate_freq': 1200,
+            'donate_thresh': 0.0,
+            'terminal_donation': 0,
+            'donate': True,
+            'replace': True,
+            'randomize': True,
+            'return_override': 0.09,
+            'N_sim': 10,
+            'savings_reinvest_rate': -1,
+            'loss_offset_pct': 1,
+            'vol_override': -1,
+            'save_path_info': True
+            }
+
+    scenario1 = {
+        'dt': 60,
+        'tau_div_start': 0.28,
+        'tau_div_end': 0.28,
+        'tau_st_start': 0.5,
+        'tau_st_end': 0.5,
+        'tau_lt_start': 0.28,
+        'tau_lt_end': 0.28,
+        'donate_start_pct': 0.2,
+        'donate_end_pct': 0.2,
+        'div_reinvest': False,
+        'div_payout': True,
+        'div_override': -1,
+        'harvest': 'none',
+        'harvest_thresh': -0.02,
+        'harvest_freq': 60,
+        'clock_reset': False,
+        'rebal_freq': 240,
+        'donate_freq': 240 * 5,
+        'donate_thresh': 0.0,
+        'terminal_donation': 0,
+        'donate': True,
+        'replace': False,
+        'randomize': False,
+        'return_override': -1,
+        'N_sim': 1,
+        'savings_reinvest_rate': -1,
+        'loss_offset_pct': 1,
+    }
+
+    scenario2 = {'dt': 60,
+                 'tau_div_start': 0.28,
+                 'tau_div_end': 0.20,
+                 'tau_st_start': 0.5,
+                 'tau_st_end': 0.35,
+                 'tau_lt_start': 0.28,
+                 'tau_lt_end': 0.20,
+                 'donate_start_pct': 0.2,
+                 'donate_end_pct': 0.2,
+                 'div_reinvest': False,
+                 'div_payout': True,
+                 'div_override': 0.02,
+                 'harvest': 'none',
+                 'harvest_thresh': -0.02,
+                 'harvest_freq': 60,
+                 'clock_reset': False,
+                 'rebal_freq': 240,
+                 'donate_freq': 240 * 5,
+                 'donate_thresh': 0.0,
+                 'terminal_donation': 0.5,
+                 'donate': True,
+                 'replace': True,
+                 'randomize': True,
+                 'return_override': 0.05,
+                 'N_sim': 50,
+                 'savings_reinvest_rate': -1,
+                 'loss_offset_pct': 1,
+                 }
+
+    scenario3 = {'dt': 60,
+                 'tau_div_start': 0.28,
+                 'tau_div_end': 0.38,
+                 'tau_st_start': 0.5,
+                 'tau_st_end': 0.6,
+                 'tau_lt_start': 0.28,
+                 'tau_lt_end': 0.38,
+                 'donate_start_pct': 0.3,
+                 'donate_end_pct': 0.3,
+                 'div_reinvest': False,
+                 'div_payout': True,
+                 'div_override': 0.02,
+                 'harvest': 'none',
+                 'harvest_thresh': -0.02,
+                 'harvest_freq': 60,
+                 'clock_reset': False,
+                 'rebal_freq': 240,
+                 'donate_freq': 240,
+                 'donate_thresh': 0.0,
+                 'terminal_donation': 0,
+                 'donate': True,
+                 'replace': False,
+                 'randomize': False,
+                 'return_override': -1,
+                 'N_sim': 1,
+                 'savings_reinvest_rate': 0.1,
+                 'loss_offset_pct': 1,
+                 }
+
+    scenario4 = {'dt': 60,
+                 'tau_div_start': 0.28,
+                 'tau_div_end': 0.20,
+                 'tau_st_start': 0.5,
+                 'tau_st_end': 0.35,
+                 'tau_lt_start': 0.28,
+                 'tau_lt_end': 0.20,
+                 'donate_start_pct': 0.1,
+                 'donate_end_pct': 0.1,
+                 'div_reinvest': False,
+                 'div_payout': True,
+                 'div_override': 0.02,
+                 'harvest': 'none',
+                 'harvest_thresh': -0.02,
+                 'harvest_freq': 60,
+                 'clock_reset': False,
+                 'rebal_freq': 240,
+                 'donate_freq': 240,
+                 'donate_thresh': 0.0,
+                 'terminal_donation': 1,
+                 'donate': True,
+                 'replace': True,
+                 'randomize': True,
+                 'return_override': 0.05,
+                 'N_sim': 50,
+                 'savings_reinvest_rate': -1,
+                 'loss_offset_pct': 0.75,
+                 }
+
+    scenario5 = {'dt': 60,
+                 'tau_div_start': 0.28,
+                 'tau_div_end': 0.38,
+                 'tau_st_start': 0.5,
+                 'tau_st_end': 0.6,
+                 'tau_lt_start': 0.28,
+                 'tau_lt_end': 0.38,
+                 'donate_start_pct': 0.50,
+                 'donate_end_pct': 0.50,
+                 'div_reinvest': False,
+                 'div_payout': True,
+                 'div_override': 0.02,
+                 'harvest': 'none',
+                 'harvest_thresh': -0.02,
+                 'harvest_freq': 60,
+                 'clock_reset': False,
+                 'rebal_freq': 240,
+                 'donate_freq': 240,
+                 'donate_thresh': 0.0,
+                 'terminal_donation': 0,
+                 'donate': True,
+                 'replace': True,
+                 'randomize': True,
+                 'return_override': 0.05,
+                 'N_sim': 50,
+                 'savings_reinvest_rate': 0.1,
+                 'loss_offset_pct': 1,
+                 }
+
+    scen_cube_test = {'dt': 20,
+                      'tau_div_start': 0.28,
+                      'tau_div_end': 0.28,
+                      'tau_st_start': 0.5,
+                      'tau_st_end': 0.5,
+                      'tau_lt_start': 0.28,
+                      'tau_lt_end': 0.28,
+                      'donate_start_pct': 0.05,
+                      'donate_end_pct': 0.05,
+                      'div_reinvest': False,
+                      'div_payout': True,
+                      'div_override': 0.02,
+                      'harvest': 'none',
+                      'harvest_thresh': -0.02,
+                      'harvest_freq': 20,
+                      'clock_reset': True,
+                      'rebal_freq': 20,
+                      'donate_freq': 240 * 5,
+                      'donate_thresh': 0.0,
+                      'terminal_donation': 0,
+                      'donate': False,
+                      'replace': True,
+                      'randomize': True,
+                      'return_override': 0.09,
+                      'N_sim': 2,
+                      'savings_reinvest_rate': -1,
+                      'loss_offset_pct': 1,
+                      'vol_override': -1,
+                      'save_path_info': False
+                      }
+    scenario1_cube = {'dt': 60,
+                      'tau_div_start': 0.28,
+                      'tau_div_end': 0.28,
+                      'tau_st_start': 0.5,
+                      'tau_st_end': 0.5,
+                      'tau_lt_start': 0.28,
+                      'tau_lt_end': 0.28,
+                      'donate_start_pct': 0.2,
+                      'donate_end_pct': 0.2,
+                      'div_reinvest': False,
+                      'div_payout': True,
+                      'div_override': 0.02,
+                      'harvest': 'none',
+                      'harvest_thresh': -0.02,
+                      'harvest_freq': 60,
+                      'clock_reset': False,
+                      'rebal_freq': 60,
+                      'donate_freq': 240 * 5,
+                      'donate_thresh': 0.0,
+                      'terminal_donation': 0,
+                      'donate': True,
+                      'replace': True,
+                      'randomize': True,
+                      'return_override': -1,
+                      'N_sim': 100,
+                      'savings_reinvest_rate': -1,
+                      'loss_offset_pct': 1,
+                      'vol_override': -1,
+                      'save_path_info': False
+                      }
+
+
+    # test_catch_float = scenario1_cube.copy()
+    # test_catch_float['return_override'] = 0.03
+    # test_catch_float['vol_override'] = 0.2
+
+
+    print('*** Run Hypercube Batch ***')
+    run_scenario_hypercube(scenario1_cube)
+    #
+    # print('*** Scenario 1 ***')
+    # run_scenario(scenario1)
+    #
+    # print('*** Scenario 2 ***')
+    # run_scenario(scenario2)
+    #
+    # print('*** Scenario 3 ***')
+    # run_scenario(scenario3)
+    #
+    # print('*** Scenario 4 ***')
+    # run_scenario(scenario4)
+    #
+    # print('*** Scenario 5 ***')
+    # run_scenario(scenario5)

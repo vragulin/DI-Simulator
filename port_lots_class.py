@@ -88,10 +88,12 @@ class PortLots:
         # TODO - re-write this as an alternative constructor (e.g. with multiple dispatch)
 
         tickers = sim_data['tickers']
+
         if len(sim_data['w'].shape) == 1:
-            w_tgt = sim_data['w']
+            w_tgt = sim_data['w_arr']
         else:
-            w_tgt = sim_data['w'][0, :]
+            w_tgt = sim_data['w_arr'][0, :]
+
         cash = 1 - w_tgt.sum()
         t_date = sim_data['dates'][0]
 
@@ -283,16 +285,17 @@ class PortLots:
             Don't worry about details like 'alpha', 'beta', etc. for now """
 
         # Update value date
+
         self.t_date = sim_data['dates'][t]
 
         # Update target stock weights and shares
-        self.df_stocks['w_tgt'] = sim_data['w'][t]
+        self.df_stocks['w_tgt'] = sim_data['w_arr'][t]
         self.df_stocks['shares'] = self.df_lots.groupby('ticker')['shares'].sum()
 
         # Drop df_stocks columns with old data that we will overwrite
         self.df_stocks = self.df_stocks[['w_tgt', 'shares', 'no_buys', 'no_sells']].fillna(0)
 
-        self.df_stocks['price'] = sim_data['px'].values[t, :]
+        self.df_stocks['price'] = sim_data['px_arr'][t, :]
 
         # Calculate market values, weights and active positions
         self.df_stocks['mkt_vals'] = self.df_stocks['shares'] * self.df_stocks['price']

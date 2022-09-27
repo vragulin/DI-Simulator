@@ -19,7 +19,7 @@ def gen_rand_returns(n_stocks: int = 10, n_steps: int = 10, dt: float = 1, risk_
     :param erp: - equity risk premium
     :param sig_idx: - volatility of the beta factor per period
     :param corr: - implied correlation (used to calc vol of the residuals)
-    :param dispersion: - stock beta and residual are drawn from uniform in the range of [1-spread - 1+spread]
+    :param dispersion: - stock beta and residual vols are drawn from uniform in the range of [1-disp - 1+disp]
     :param cum: - show cumulative return indices (if True), else show returns
     :param rng: - random number generator object
     :return: np array of period returns n_stocks x n_steps, or of cumulative returns (n_stocks x (n_steps+1))

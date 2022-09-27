@@ -356,3 +356,32 @@ def test_index_irr(irr_data):
     exp_irr = 0.234924
     assert pt.approx(exp_irr, abs=1.0e-6) == irr
 
+
+@pt.fixture
+def stock_avg_vol_data():
+    d_px_arr = [[0, 0, 0],
+                [0.1, 0.1, -0.1],
+                [-0.1, 0, 0.2],
+                [0.2, 0.1, -0.1],
+                [-0.2, 0, 0.2]]
+    d_px = np.array(d_px_arr)
+
+    w = np.array([0.4, 0.35, 0.25])
+
+    dt = 0.25
+    return d_px, w, dt
+
+
+def test_stk_avg_vol_zero_dt(stock_avg_vol_data):
+    d_px, w, dt = stock_avg_vol_data
+    with pt.raises(AssertionError):
+        vol_avg = im.stock_vol_avg(d_px, w, 0)
+
+
+def test_stk_avg_vol(stock_avg_vol_data):
+    d_px, w, dt = stock_avg_vol_data
+    vol_avg = im.stock_vol_avg(d_px, w, dt)
+    exp_vol = 0.233387
+    assert pt.approx(exp_vol, abs=1.0e-6) == vol_avg
+
+
