@@ -179,7 +179,7 @@ def irr_solve(cf: np.array, dt: int, ann_factor: float = 252, guess: float = 0.0
         return (np.exp(r[0] / freq) - 1) * freq
 
 
-# @njit
+@njit
 def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: Optional[np.array],
                   dt: int, ann_factor: float = 252, tax_lt: float = 0.28,
                   tax_st: float = 0.5, div_payout: bool = True) -> float:
@@ -228,6 +228,7 @@ def index_liq_tax(idx_val: np.array, idx_div: np.array, idx_tri: Optional[np.arr
 
 # def index_irr(dt: int, idx_start: float, idx_end: float, idx_div: np.array,
 #               guess: float = 0.09, bounds: tuple = (0.0, 0.2), ann_factor: float=252) -> float:
+#@njit
 def index_irr(dt: int, idx_start: Union[float, np.ndarray], idx_end: Union[float, np.ndarray],
               idx_div: np.array,
               guess: float = 0.09, bounds: tuple = (-0.5, 0.5),
@@ -256,13 +257,13 @@ def index_irr(dt: int, idx_start: Union[float, np.ndarray], idx_end: Union[float
 
     return irr
 
-
+#@njit
 def stock_vol_avg(d_px: np.array, w0: np.array, dt: float) -> float:
     """ Calculate weighted average individual stock vol
     for a fixed-share index
     :param d_px: array of price % changes (n_steps+1, n_stocks)
-    :param w0: array of initial weights (n_stocks), assume weights
-                evolve with share prices
+    :param w0: array of initial weights (n_stocks), assume weig
+
     :param dt: length of a time step in years
     :return: weighted average vol of stocks in the index
     """

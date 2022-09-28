@@ -100,7 +100,8 @@ def gen_test_mkt_data(files: dict, tgt_px_ret: float = 0.07, n_stocks: int = 10,
         idx = dates
 
     # Pack outputs into dataframes
-    tickers = [f"S{str(int(i)).zfill(3)}" for i in range(n_stocks)]
+    n_pad = int(np.log10(n_stocks-1)) + 1
+    tickers = sorted([f"S{str(int(i)).zfill(n_pad)}" for i in range(n_stocks)])
     df_prices = pd.DataFrame(prices, index=idx, columns=tickers)
     df_tri = pd.DataFrame(tri, index=idx, columns=tickers)
     df_weights = pd.DataFrame(weights, index=idx, columns=tickers)
@@ -126,7 +127,7 @@ if __name__ == "__main__":
     end_date = datetime.datetime(2022, 9, 1)
 
     # File locations
-    dir_path = 'data/test_data_500'
+    dir_path = f'data/test_data_{n_stocks}'
     files = {'prices': os.path.join(dir_path, 'prices.pickle'),
              't_rets': os.path.join(dir_path, 't_rets.pickle'),
              'daily_w': os.path.join(dir_path, 'daily_w.pickle')}

@@ -82,6 +82,11 @@ def load_mkt_data(data_files: dict, data_freq: int, filter_params: Optional[dict
 
     # Load data from files
     px = pd.read_pickle(data_files['px']).fillna(method='ffill').fillna(0)
+
+    # Check that stocks are alphabetically sorted, otherwise there may be issues later in the code.
+    # TODO - in later versions teach the code to handle unsorted stock
+    assert sorted(px.columns.to_list()) == px.columns.to_list(), "Error: stocks in data files not sorted."
+
     dates = px.index
     dates_idx = range(0, len(px.index), data_freq)
     px.index = range(0, len(px.index))

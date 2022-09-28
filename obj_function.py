@@ -56,7 +56,7 @@ def tax_lots(trades: np.array, max_sell: np.array, tax_per_shr: np.array, cum_sh
         return 0
 
     # If for at least one stock we are trying to sell more than allowed
-    if (-trades > max_sell).any():
+    if (-trades > max_sell + np.finfo(float).eps).any():
         return INFINITY
 
     # Broadcast shares across all lots
@@ -108,7 +108,7 @@ def obj_func_w_lots(trades: np.array, shares: np.array, price: np.array, w_tgt: 
     # print(f'\nCalled numpy version:\nExp PnL = {exp_pnl}')
 
     # Risk-adjustment
-    ann_factor = 253
+    ann_factor = 252
     if risk_adj:
         risk_cost = 0.5 * crra * new_port_val * ann_factor * new_w_actv.T @ cov_matrix @ new_w_actv
     else:

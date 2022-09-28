@@ -97,7 +97,7 @@ def block_start_index_pd(df: pd.DataFrame, col='Ticker') -> np.array:
     nz = np.nonzero(prev_non_equal)
     return np.array(nz).astype(int).ravel()
 
-
+@njit
 def block_start_index(arr: np.ndarray) -> np.array:
     """ Calculate index of rows where new blocks of tickers start
         This version only uses numpy

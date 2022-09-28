@@ -17,6 +17,7 @@ import pytest
 import time
 
 from typing import Union
+from numba import njit
 from contextlib import suppress
 from port_lots_class import PortLots
 from obj_function import obj_func_w_lots, fetch_obj_params, tax_lots
@@ -341,7 +342,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
     bounds = gen_bounds(guess, port, t, sim_data, max_harvest)
 
     # Constraints
-    # @njit
+    #@njit
     def new_excess_cash(trades: np.array, price: np.array, trx_cost: float,
                         port_cash: float, port_value: float, min_w_cash: float) -> float:
         """ Calculate excess cash weight after the rebalance using numpy (no pandas)
@@ -353,7 +354,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
         return w_excess_cash + np.finfo(float).eps  # Give some flex for rounding error
 
     # Active beta of the new portfolio
-    # @njit
+    #@njit
     def new_active_beta(trades: np.array, shares: np.array, price: np.array, beta: np.array,
                         w_tgt: np.array, trx_cost: float, port_val: float) -> float:
         """ Calculate active beta (i.e. actual - benchmark) after the rebalance
@@ -384,7 +385,9 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
                                 inp['tkr_broadcast_idx'], inp['tkr_block_idx'],
                                 inp['crra'])
 
-    print(f"Obj Func(guess) = {obj_guess:,.2f}")
+    # TODO - if obj_guess > 0, use zero as a starting guess instead
+
+    print(f"Obj Func(guess) = {obj_guess:,.4f}")
 
     constraints = (
         # Minimum excess cash post-rebalance
@@ -916,6 +919,7 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
         logging.info("Trades:")
         logging.info(opt_res['opt_trades'])
         if algorithm == 'inst_replace':
+
             logging.info("\nHarvest:")
             logging.info(opt_res['harvest_trades'])
         logging.info(f"\nHarvest={opt_res['harvest']:.4f}, "
