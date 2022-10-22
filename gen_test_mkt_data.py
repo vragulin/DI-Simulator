@@ -8,7 +8,7 @@ import pandas as pd
 import datetime
 import os
 from typing import Optional
-
+from pathlib import Path
 from gen_random import gen_rand_returns
 
 
@@ -118,7 +118,7 @@ def gen_test_mkt_data(files: dict, tgt_px_ret: float = 0.07, n_stocks: int = 10,
 if __name__ == "__main__":
     tgt_px_ret = 0.07
     n_stocks = 500
-    n_steps = 7200
+    n_steps = 1260
     dt = 1 / 252
     sig_idx = 0.16
     corr = 0.4
@@ -127,10 +127,17 @@ if __name__ == "__main__":
     end_date = datetime.datetime(2022, 9, 1)
 
     # File locations
-    dir_path = f'data/test_data_{n_stocks}'
-    files = {'prices': os.path.join(dir_path, 'prices.pickle'),
-             't_rets': os.path.join(dir_path, 't_rets.pickle'),
-             'daily_w': os.path.join(dir_path, 'daily_w.pickle')}
+    code = "5y_"
+    dir_path = Path(f'data/test_data_{code}{n_stocks}')
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+    # files = {'prices': os.path.join(dir_path, 'prices.pickle'),
+    #          't_rets': os.path.join(dir_path, 't_rets.pickle'),
+    #          'daily_w': os.path.join(dir_path, 'daily_w.pickle')}
+
+    files = {'prices': dir_path / 'prices.pickle',
+             't_rets': dir_path / 't_rets.pickle',
+             'daily_w': dir_path / 'daily_w.pickle'}
 
     # Trading dates
     t_dates = sorted(gen_trading_dates(until=end_date, n=n_steps + 1))

@@ -24,6 +24,7 @@ class Simulator:
         # Remove old log file, if it exists
         if log_file is not None:
             if os.path.exists(log_file):
+
                 os.remove(log_file)
                 time.sleep(1)  # Sleep so that the system has time to delete the file
 
@@ -54,4 +55,5 @@ class Simulator:
         to optimizer without arguments or parentheses."""
         self.callback_count += 1
         if self.callback_count % 20 == 0:
+
             print(f'Iterations: {self.callback_count}, Obj evals: {self.num_calls}, Obj: {self.min_obj_sofar}')

@@ -20,6 +20,7 @@ import sim_multi_path as smp
 def init_batch() -> pd.DataFrame:
     """ Define parameters for runs in the batch.
     :return: dataframe with param settings for each run
+
     """
 
     # Define scnarios

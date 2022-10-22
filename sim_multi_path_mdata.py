@@ -48,7 +48,7 @@ def gen_data_dict_emba(d_px: pd.DataFrame, w0: np.array,
         d_px *= vol_override / vol
         d_px = np.maximum(d_px, -1 + np.finfo(float).eps)  # Ensure no neg prices
 
-    if return_override > 0:
+    if (return_override is not None) and (return_override > 0):
         rand_return = (252 / dt) * (np.sum(w0 * np.product(1 + d_px.values[1:, :], axis=0)
                                            ) ** (1 / n_steps) - 1)
         d_px.iloc[1:, :] += (return_override - rand_return) * (dt / 252)
@@ -171,17 +171,20 @@ if __name__ == "__main__":
                         format='%(message)s')
 
     # Load input parameters and set up accumulator structures
-    input_file = 'inputs/config_mkt_data_test.xlsx'
+    input_file = 'inputs/config_mkt_1path.xlsx'
     params = sopm.load_params(input_file)
 
     # Files with info needed to generate paths
     # path_data_dir = 'data/paths'
-    # p_files = {'base_dict': f"{path_data_dir}/base_data_dict_replace_60.pickle",
+    # p_files = {'base_dict': f"{path_data_dir}/base_data_dict_rep
+    # lace_60.pickle",
     #            'shuffles': f"{path_data_dir}/path_shuffles_replace_60.csv",
     #            'weights': f"{path_data_dir}/path_weights_replace_60.csv"}
 
-    path_dir = 'data/paths'
-    dt = 20
+    # path_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/mkt_data_15y/paths"
+    # path_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/test_data_500/paths"
+    path_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/test_data_5y_500/paths"
+    dt = params['dt']
     p_files = {'base_dict': os.path.join(path_dir, f'base_data_dict_{dt}.pickle'),
                'shuffles': os.path.join(path_dir, f'path_shuffles_{dt}.csv'),
                'weights': os.path.join(path_dir, f'path_weights_{dt}.csv')}
@@ -201,7 +204,6 @@ if __name__ == "__main__":
     logging.error('\nConfig file: ' + input_file + '\n')
     logging.error('\nPath Files:\n' + str(p_files) + '\n')
     logging.error(f'#Paths: {n_paths}, #Stocks: {n_stocks}')
-
 
     tic = time.perf_counter()  # Timer start
 
@@ -235,7 +237,7 @@ if __name__ == "__main__":
     sop.pd_to_csv(steps_report, 'steps_report', suffix=timestamp)
 
     # steps_report.drop(columns='hvst_potl') - drop some columns so that that the report fits the screen
-    pd.options.display.min_rows = 20
+    pd.options.display.min_rows = 30
     # steps_to_print = df_to_format(steps_report * 100,
     #                               formats={'_dflt': '{:.2f}'},
     #                               multipliers={'port_val': 0.01, 'bmk_val': 0.01}
@@ -243,8 +245,10 @@ if __name__ == "__main__":
     # print(steps_to_print)
 
     print(df_to_format(steps_report * 100,
-                       formats={'_dflt': '{:.6f}'},
-                       multipliers={'port_val': 0.01, 'bmk_val': 0.01}
+                       formats={'div': '{:.2f}', 'donate': '{:.2f}',
+                                'port_val': '{:.2f}', 'bmk_val': '{:.2f}',
+                                '_dflt': '{:.4f}'},
+                       # multipliers={'port_val': 0.01, 'bmk_val': 0.01}
                        ))
 
     print("\nDone")

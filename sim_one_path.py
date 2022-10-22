@@ -26,6 +26,9 @@ from pretty_print import df_to_format
 from simulator_class import Simulator
 from load_mkt_data import vectorize_dict
 
+import warnings
+warnings.filterwarnings("ignore")
+
 pd.options.display.float_format = '{:,.4f}'.format
 
 
@@ -302,8 +305,8 @@ def gen_bounds(guess: pd.Series, port: PortLots, t: int, sim_data: dict, max_har
 
     # Guess directions of trades and impose restrictions to make the problem convex
     trade_signs = guess_trade_signs(guess, port, t, sim_data)
-    print("\nGuessed Trade Signs:")
-    print(trade_signs.T)
+    # print("\nGuessed Trade Signs:")
+    # print(trade_signs.T)
 
     # Update bounds
     for b in ['lb', 'ub']:
@@ -312,7 +315,7 @@ def gen_bounds(guess: pd.Series, port: PortLots, t: int, sim_data: dict, max_har
 
     # Save trade_signs analysis
     port.trade_signs = trade_signs
-    print("\nGuessed signs:\n", trade_signs['sign'])
+    # print("\nGuessed signs:\n", trade_signs['sign'])
 
     # Set bounds for variables
     bounds = tuple(
@@ -326,7 +329,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
                   log_file: str = None) -> dict:
     """ Harvesting with an optimizer.  Generate a starting point with a heuristic rebalance
     """
-    print('Running opt_rebalance')
+    # print('Running opt_rebalance')
 
     # Run the heursitic optimizer to generate the initial guess and a list of 'to_buy' and 'to_sell' stocks
     res_first_step = heuristic_rebalance(port, t, sim_data, max_harvest)
@@ -338,7 +341,22 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
     inp = fetch_obj_params(port, t, sim_data, max_harvest)
 
     # Set up bounds and an initial guess
-    guess = res_first_step['opt_trades']
+    guess0 = res_first_step['opt_trades']
+
+    # Make sure we don't have even small neg positions because of floating point precision issues
+    # This causes the optimizer to blow up sometimes
+    guess = np.maximum(-port.df_stocks['shares'], guess0)
+
+    # Check that we don't have shorts, and that rounding does not move the guess too much
+    assert (port.df_stocks['shares'] + guess).min() >= 0, \
+            f"Negative positions: {(port.df_stocks['shares'] + guess).min()}"
+
+    try:
+
+        assert np.abs(guess - guess0).max() < config.tol, "Error: move in guess over limit"
+    except AssertionError:
+        print("Something wrong here")
+
     bounds = gen_bounds(guess, port, t, sim_data, max_harvest)
 
     # Constraints
@@ -369,15 +387,15 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
         new_beta_actv = new_w_actv @ beta
         return new_beta_actv
 
-    print("Checking if the guess is feasible and calc its obj_func:")
-    xcash = new_excess_cash(guess.values, inp["price"], inp["trx_cost"], inp["cash"], inp["port_val"],
-                            inp["min_w_cash"])
-    print(f"Excess cash = {xcash * 100:.3f}%")
-
-    guessbeta = new_active_beta(guess.values, inp["shares"], inp["price"], inp["beta"],
-                                inp["w_tgt"], inp["trx_cost"], inp["port_val"])
-    print(f"Active beta = {guessbeta * 100:.3f}%")
-
+    # print("Checking if the guess is feasible and calc its obj_func:")
+    # xcash = new_excess_cash(guess.values, inp["price"], inp["trx_cost"], inp["cash"], inp["port_val"],
+    #                         inp["min_w_cash"])
+    # # print(f"Excess cash = {xcash * 100:.3f}%")
+    #
+    # guessbeta = new_active_beta(guess.values, inp["shares"], inp["price"], inp["beta"],
+    #                             inp["w_tgt"], inp["trx_cost"], inp["port_val"])
+    # # print(f"Active beta = {guessbeta * 100:.3f}%")
+    #
     obj_guess = obj_func_w_lots(guess.values,
                                 inp['shares'], inp['price'], inp['w_tgt'], inp['xret'],
                                 inp['trx_cost'], inp['port_val'], inp['alpha_horizon'], inp['cov_matrix'],
@@ -385,9 +403,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
                                 inp['tkr_broadcast_idx'], inp['tkr_block_idx'],
                                 inp['crra'])
 
-    # TODO - if obj_guess > 0, use zero as a starting guess instead
-
-    print(f"Obj Func(guess) = {obj_guess:,.4f}")
+    # print(f"Obj Func(guess) = {obj_guess:,.4f}")
 
     constraints = (
         # Minimum excess cash post-rebalance
@@ -426,12 +442,12 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
         args=args,
         # Initial guess
         x0=guess,
-        # method='SLSQP',
+        method='SLSQP',
         bounds=bounds,
         # tol=1e-8,
         constraints=constraints,
         callback=ret_sim.callback,
-        options={'maxiter': 5000, 'disp': True}
+        options={'maxiter': config.maxiter, 'disp': False}
     )
 
     # Close log file handle
@@ -446,7 +462,15 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
     df_lots = port.df_lots
 
     res = res_first_step.copy()
-    opt_trades = max_adj_ret['x']
+
+    # If optimizer did not improve, fall back to the heuristic guess
+    if max_adj_ret['fun'] <= obj_guess:
+        opt_trades = max_adj_ret['x']
+    else:
+        if (max_adj_ret['fun'] - obj_guess) > 1e-5:
+            print("Warning: optimizer is worse than heuristic, using heuristic. "
+                  f"(Opt: {max_adj_ret['fun']:.6f}, Guess: {obj_guess:.6f})")
+        opt_trades = guess.values
 
     df_stocks['trade'] = opt_trades
     harvest = -tax_lots(opt_trades, inp['max_sell'], inp['tax_per_shr'], inp['cum_shrs'],
@@ -523,6 +547,9 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
             # Add to the trade list
             df_stocks['to_sell'] = df_stocks['to_sell'] | (df_stocks['shrs_for_cut_w_cap'] > 0)
             df_stocks['trade'] -= df_stocks['shrs_for_cut_w_cap']
+
+    # Make sure we don't sell more than what we have (due to machine precision issues etc.)
+    df_stocks['trade'] = np.maximum(-df_stocks['shares'], df_stocks['trade'])
 
     # Now calculate the buys to offset beta impact of harvest sales and re-invest excess cash
     # For now assume that beta of all stocks is 1
@@ -877,6 +904,7 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     port = PortLots.init_portfolio_from_dict(sim_data)
     port.update_sim_data(sim_data=sim_data, t=0)
 
+
     log_port_report(port, 0)
 
     # Loop over periods, rebalance / harvest at each period, keep track of P&L
@@ -888,9 +916,10 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     for t in range(1, n_steps + 1):
 
         if verbose:
-            if t % 50 == 0:
+            if t % 10 == 0:
                 print(f"Step = {t}", end=",\t")
-                print(f"# lots: {len(port.df_lots)}")
+                print(f"# lots: {len(port.df_lots)}", end=",\t")
+                print(f"# stocks: {len(port.df_stocks)}")
 
         # Take account of the dividends that we have received during the period
         # Assume that all divs during the period happen on the last day (i.e. stocks are ex-div)
@@ -941,6 +970,13 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
 
         # Clock reset
         if params['clock_reset']:
+            # Specify cut-off externally to match emba.
+            # lt_cutoff = None
+            # if config.USE_EMBA_LT_CUT_OFF:
+            #     steps_per_year = int(252 / params['dt'])
+            #     if t > steps_per_year:
+            #         lt_cutoff = sim_data['dates'][t-steps_per_year-1]
+            # clock_reset_tax = port.reset_clock(reset_thresh=params['reset_thresh'], lt_cutoff=lt_cutoff)
             clock_reset_tax = port.reset_clock(reset_thresh=params['reset_thresh'])
         else:
             clock_reset_tax = 0

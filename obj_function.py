@@ -10,8 +10,10 @@ import numpy as np
 
 import fast_lot_math as flm
 from port_lots_class import PortLots
+from numba import njit
 
 INFINITY = 9.999e15
+EPSILON = np.finfo(float).eps
 
 def fetch_obj_params(port: PortLots, t: int, sim_data: dict, max_harvest: float) -> dict:
     """ Extract parameters used in the objective function from structures in the correct
@@ -46,7 +48,7 @@ def fetch_obj_params(port: PortLots, t: int, sim_data: dict, max_harvest: float)
     return data_dict
 
 
-#@njit
+@njit
 def tax_lots(trades: np.array, max_sell: np.array, tax_per_shr: np.array, cum_shrs: np.array,
              tkr_broadcast_idx: np.array, tkr_block_idx: np.array) -> float:
     """ Calculate tax liability for a trade
@@ -56,7 +58,7 @@ def tax_lots(trades: np.array, max_sell: np.array, tax_per_shr: np.array, cum_sh
         return 0
 
     # If for at least one stock we are trying to sell more than allowed
-    if (-trades > max_sell + np.finfo(float).eps).any():
+    if (-trades > max_sell + EPSILON).any():
         return INFINITY
 
     # Broadcast shares across all lots
@@ -74,7 +76,7 @@ def tax_lots(trades: np.array, max_sell: np.array, tax_per_shr: np.array, cum_sh
     return total_tax
 
 
-#@njit
+@njit
 def obj_func_w_lots(trades: np.array, shares: np.array, price: np.array, w_tgt: np.array, xret: np.array,
                     trx_cost: float, port_val: float, alpha_horizon: float, cov_matrix: np.array,
                     max_sell: np.array, tax_per_shr: np.array, cum_shrs: np.array,
@@ -109,8 +111,11 @@ def obj_func_w_lots(trades: np.array, shares: np.array, price: np.array, w_tgt: 
 
     # Risk-adjustment
     ann_factor = 252
+
     if risk_adj:
-        risk_cost = 0.5 * crra * new_port_val * ann_factor * new_w_actv.T @ cov_matrix @ new_w_actv
+        # risk_cost = 0.5 * crra * new_port_val * ann_factor * new_w_actv.T @ cov_matrix @ new_w_actv
+        risk_cost = 0.5 * crra * new_port_val * new_w_actv.T @ cov_matrix @ new_w_actv
+
     else:
         risk_cost = 0
     # print(f'Risk Cost = {risk_cost}')

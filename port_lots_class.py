@@ -85,7 +85,6 @@ class PortLots:
     @classmethod
     def init_portfolio_from_dict(cls, sim_data: dict) -> PortLots:
         """ Initialize simulation portfolio, establish positions matching the index """
-        # TODO - re-write this as an alternative constructor (e.g. with multiple dispatch)
 
         tickers = sim_data['tickers']
 
@@ -440,7 +439,9 @@ class PortLots:
 
         return data_dict
 
+#    def reset_clock(self, reset_thresh: float = 0, lt_cutoff: Optional[dt.date] = None) -> float:
     def reset_clock(self, reset_thresh: float = 0) -> float:
+
         """ Sell and buy-back long-term positions so that they can be used again
             for harvesting losses.  Assume that market data has been updated and
             the portfolio has been marked to market.
@@ -450,7 +451,9 @@ class PortLots:
         df_lots = self.df_lots
 
         # Update lots long-term eligibility and market data
+        # if lt_cutoff is None:
         lt_cutoff = self.t_date + relativedelta(years=-1)
+
         df_lots['long_term'] = df_lots['start_date'] <= np.datetime64(lt_cutoff)
         df_lots['mv'] = df_lots['shares'] * df_lots['price']
 

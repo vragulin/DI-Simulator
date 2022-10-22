@@ -3,7 +3,8 @@ from embaTestbed2022_testing import run_scenario_vr, run_scenario
 
 np.seterr('raise')
 
-def run_test_one_path(inputs):
+
+def run_test_one_setting(inputs):
     only_base = False
     base_scenario = inputs.copy()
 
@@ -25,7 +26,7 @@ def run_test_one_path(inputs):
              }
     inputs = base_scenario.copy()
     inputs.update(taxes)
-    inputs['save_path_info'] = False # No need to save the second time
+    inputs['save_path_info'] = False  # No need to save the second time
     run_scenario_vr(inputs, only_base=only_base)
 
     print('*** Test with Taxes and Terminal Donation ***')
@@ -33,6 +34,7 @@ def run_test_one_path(inputs):
     inputs.update(taxes)
     inputs['terminal_donation'] = 1
     run_scenario_vr(inputs, only_base=only_base)
+
 
 # -----------------------------
 # Entry Point
@@ -46,8 +48,8 @@ test = {'dt': 20,
         'tau_st_end': 0.0,
         'tau_lt_start': 0.0,
         'tau_lt_end': 0.0,
-        'donate_start_pct': 0.1,
-        'donate_end_pct': 0.1,
+        'donate_start_pct': 0.0,
+        'donate_end_pct': 0.0,
         'div_reinvest': False,
         'div_payout': True,
         'div_override': 0.02,
@@ -63,13 +65,31 @@ test = {'dt': 20,
         'replace': True,
         'randomize': True,
         'return_override': 0.07,
-        'N_sim': 1,
+        'N_sim': 25,
         'savings_reinvest_rate': -1,
         'loss_offset_pct': 1,
         'vol_override': 0.16,
         'save_path_info': True
         }
 
-# Test one path
-run_test_one_path(test)
+test60 = test.copy()
+test60['dt'] = 60
+test60['harvest_freq'] = test60['dt']
+test60['rebal_freq'] = test60['dt']
+
+test_don25 = test.copy()
+test_don25['donate'] = True
+test_don25['donate_start_pct'] = test_don25['donate_end_pct'] = 0.25
+
+test_no_random = test.copy()
+test_no_random['N_sim'] = 1
+test_no_random['randomize'] = False
+
+test_no_random_60 = test_no_random.copy()
+test_no_random_60['dt'] = 60
+test_no_random_60['harvest_freq'] = test60['dt']
+test_no_random_60['rebal_freq'] = test60['dt']
+
+# Test one set of parameters
+run_test_one_setting(test_don25)
 print("Done")

@@ -299,7 +299,7 @@ def run_sim_path(data_dict: dict, inputs: dict) -> dict:
 
         # Update MV
         mv *= 1 + (dpx[t, :, None] @ np.ones((1, mv.shape[1])))
-        # print(f"t={t}, port_val = {mv.sum():.6f}, basis = {basis.sum():.6f}")
+        # print(f"t={t}, port_val = {mv.sum():.8f}, basis = {basis.sum():.8f}")
 
         # Harvest
         if inputs['dt'] * t % inputs['harvest_freq'] == 0:
@@ -310,12 +310,12 @@ def run_sim_path(data_dict: dict, inputs: dict) -> dict:
                                                              inputs['savings_reinvest_rate'], inputs['loss_offset_pct'])
                 # print(f"Savings: {savings}")
                 harvest[t] = savings / mv.sum()
-        # Rebal
-        if inputs['dt'] * t % inputs['rebal_freq'] == 0 and not inputs['randomize']:
-            # print(np.sum((w[t, :] > 0) != (w[t-3, :] > 0)))
-            (basis, mv, lot_start) = update_rebal(inputs['dt'], cash, t, tau_st, tau_lt, w, mv, lot_idx, basis,
-                                                  lot_start, px, cf)
-            cash = 0
+        # # Rebal
+        # if inputs['dt'] * t % inputs['rebal_freq'] == 0 and not inputs['randomize']:
+        #     # print(np.sum((w[t, :] > 0) != (w[t-3, :] > 0)))
+        #     (basis, mv, lot_start) = update_rebal(inputs['dt'], cash, t, tau_st, tau_lt, w, mv, lot_idx, basis,
+        #                                           lot_start, px, cf)
+        #     cash = 0
 
         # Donate
         if inputs['dt'] * t % inputs['donate_freq'] == 0 and inputs['donate'] and (donate_pct > np.finfo(float).eps):

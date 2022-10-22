@@ -92,15 +92,15 @@ if __name__ == "__main__":
     params = load_params(input_file)
 
     # Load simulation data files
-    # dir_path = 'data/test_data_500'
-    # data_files = {'px': os.path.join(dir_path, 'prices.pickle'),
-    #               'tri': os.path.join(dir_path, 't_rets.pickle'),
-    #               'w': os.path.join(dir_path, 'daily_w.pickle')}
+    dir_path = 'data/test_data_500'
+    data_files = {'px': os.path.join(dir_path, 'prices.pickle'),
+                  'tri': os.path.join(dir_path, 't_rets.pickle'),
+                  'w': os.path.join(dir_path, 'daily_w.pickle')}
 
-    dir_path = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp_clean/"
-    data_files = {'px': os.path.join(dir_path, 'idx_prices.pickle'),
-                  'tri': os.path.join(dir_path, 'idx_t_rets.pickle'),
-                  'w': os.path.join(dir_path, 'idx_daily_w.pickle')}
+    # dir_path = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp_clean/"
+    # data_files = {'px': os.path.join(dir_path, 'idx_prices.pickle'),
+    #               'tri': os.path.join(dir_path, 'idx_t_rets.pickle'),
+    #               'w': os.path.join(dir_path, 'idx_daily_w.pickle')}
 
     data_dict = load_data(data_files, params)
 
