@@ -1,5 +1,5 @@
 # Passive Inputs
-run_code = 'test_500'
+run_code = 'mkt_20'
 
 if run_code == 'test_10':
     # testing files

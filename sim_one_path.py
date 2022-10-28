@@ -2,31 +2,30 @@
     Direct index / tax harvesting simulation.  Based on James's embaTestbed2022.py.
     by V. Ragulin, started 3-Aug-2022
 """
-import copy
-import os
-import warnings
-import numpy as np
 import datetime as dt
-import dateutil.relativedelta as du
 import logging
-import scipy.optimize as sco
-import config
-import index_math as im
+import os
+import time
+import warnings
+from contextlib import suppress
+from typing import Union
+
+import dateutil.relativedelta as du
+import numpy as np
 import pandas as pd
 import pytest
-import time
+import scipy.optimize as sco
 
-from typing import Union
-from numba import njit
-from contextlib import suppress
-from port_lots_class import PortLots
-from obj_function import obj_func_w_lots, fetch_obj_params, tax_lots
+import config
+import index_math as im
 from gen_random import gen_rand_returns
+from load_mkt_data import vectorize_dict
+from obj_function import obj_func_w_lots, fetch_obj_params, tax_lots
+from port_lots_class import PortLots
 from pretty_print import df_to_format
 from simulator_class import Simulator
-from load_mkt_data import vectorize_dict
+from heur_3step import heur_3step_rebal
 
-import warnings
 warnings.filterwarnings("ignore")
 
 pd.options.display.float_format = '{:,.4f}'.format
@@ -349,7 +348,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
 
     # Check that we don't have shorts, and that rounding does not move the guess too much
     assert (port.df_stocks['shares'] + guess).min() >= 0, \
-            f"Negative positions: {(port.df_stocks['shares'] + guess).min()}"
+        f"Negative positions: {(port.df_stocks['shares'] + guess).min()}"
 
     try:
 
@@ -360,7 +359,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
     bounds = gen_bounds(guess, port, t, sim_data, max_harvest)
 
     # Constraints
-    #@njit
+    # @njit
     def new_excess_cash(trades: np.array, price: np.array, trx_cost: float,
                         port_cash: float, port_value: float, min_w_cash: float) -> float:
         """ Calculate excess cash weight after the rebalance using numpy (no pandas)
@@ -372,7 +371,7 @@ def opt_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0
         return w_excess_cash + np.finfo(float).eps  # Give some flex for rounding error
 
     # Active beta of the new portfolio
-    #@njit
+    # @njit
     def new_active_beta(trades: np.array, shares: np.array, price: np.array, beta: np.array,
                         w_tgt: np.array, trx_cost: float, port_val: float) -> float:
         """ Calculate active beta (i.e. actual - benchmark) after the rebalance
@@ -529,9 +528,9 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
     df_stocks['trade'] = df_lots.groupby(by='ticker')['trade'].sum()
 
     # Also sell stocks with w_actv > max_active_weight where we have long-term capital gains
-    if ('max_actv_wgt' in params) and (df_stocks['w_actv'] > params['max_actv_wgt']).any():
+    if ('max_actv_wgt' in params) and (df_stocks['w_actv'] > params['max_active_wgt']).any():
         # Identify long-term lots for stocks where we have excess overweights
-        df_lots['for_cutting_pos'] = (df_lots['w_actv'] > params['max_actv_wgt']) \
+        df_lots['for_cutting_pos'] = (df_lots['w_actv'] > params['max_active_wgt']) \
                                      & (df_lots['long_term']) \
                                      & (~df_lots['stk_to_sell'])
 
@@ -540,7 +539,7 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
             df_stocks['shrs_for_cutting'] = df_lots.groupby(by='ticker')['shrs_for_cutting'].sum()
 
             # Determine for each stock the number of shares we need to sell to get within the overweight band
-            df_stocks['out_actv_band%'] = np.maximum(df_stocks['w_actv'] - params['max_actv_wgt'], 0)
+            df_stocks['out_actv_band%'] = np.maximum(df_stocks['w_actv'] - params['max_active_wgt'], 0)
             df_stocks['out_actv_band_shrs'] = df_stocks['out_actv_band%'] * port.port_value / df_stocks['price']
             df_stocks['shrs_for_cut_w_cap'] = np.minimum(df_stocks['out_actv_band_shrs'], df_stocks['shrs_for_cutting'])
 
@@ -573,7 +572,7 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
     df_stocks.loc[df_stocks.index[0], 'buy_mv'] = df_stocks.loc[df_stocks.index[0], 'cum_buy_mv']  # fill first element
 
     # If we have not bought enough, spread the shortfall across all remaining 'to buy' stocks
-    #TODO - make sure that stocks with zero positions are included into 'to buy' stocks
+    # TODO - make sure that stocks with zero positions are included into 'to buy' stocks
     shortfall = tot_mv_to_buy - df_stocks['buy_mv'].sum()
     if shortfall > 0:
         n_buys = (1 - df_stocks['to_sell']).sum()
@@ -904,14 +903,13 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     port = PortLots.init_portfolio_from_dict(sim_data)
     port.update_sim_data(sim_data=sim_data, t=0)
 
-
     log_port_report(port, 0)
 
     # Loop over periods, rebalance / harvest at each period, keep track of P&L
     # Simulation parameter - maximum amount of stocks that we harvest at each step
     max_harvest = params['max_harvest']
 
-    # Initialize the structure to keep simulation info
+    # Initialize a list to keep simulation info
     sim_hist = init_sim_hist(port)
     for t in range(1, n_steps + 1):
 
@@ -938,6 +936,8 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
             opt_res = port.harvest_inst_replace(t, sim_data)
         elif algorithm == 'optimizer':
             opt_res = opt_rebalance(port, t, sim_data, max_harvest, log_file=log_file)
+        elif algorithm == 'heur_3step':
+            opt_res = heur_3step_rebal(port, t, sim_data, max_harvest)
         else:
             opt_res = heuristic_rebalance(port, t, sim_data, max_harvest)
 
@@ -948,7 +948,6 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
         logging.info("Trades:")
         logging.info(opt_res['opt_trades'])
         if algorithm == 'inst_replace':
-
             logging.info("\nHarvest:")
             logging.info(opt_res['harvest_trades'])
         logging.info(f"\nHarvest={opt_res['harvest']:.4f}, "

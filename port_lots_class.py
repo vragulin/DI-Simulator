@@ -175,9 +175,11 @@ class PortLots:
         """ Print report of lots """
 
         # Columns to include in the report
-        rpt_cols = ['ticker', 'start_date', 'shares', 'basis', 'price', '%_gain']
+        # rpt_cols = ['ticker', 'start_date', 'shares', 'basis', 'price', '%_gain']
         # Specify format for the lots matrix
         fmt_df = {
+            'ticker': '{}',
+            'start_date': 'date_shrt',
             '_dflt': '{:.2f}'
         }
 
@@ -199,6 +201,37 @@ class PortLots:
         """
         new_port = deepcopy(self)
         return new_port
+
+    def split_large_lots(self, max_size: float) -> list:
+        """ Split large lots into several pieces, so that we don't have
+            very large lots that leave large gaps
+            Update the lots portfolio attribute (dataframe) in place.
+
+            :params max_size:  maximum lot size
+            :return: list of indices of new lots
+        """
+
+        df_lots = self.df_lots
+        n_lots = len(df_lots)
+        # Identify large lots
+        mkt_vals = df_lots['price'] * df_lots['shares']
+        idx_large = mkt_vals.index[mkt_vals > max_size]
+        n_new_lots = int((mkt_vals // max_size).sum())
+
+        df_new = pd.DataFrame(np.nan, index=range(n_lots, n_lots + n_new_lots),
+                              columns=df_lots.columns)
+        idx = n_lots
+
+        for i in idx_large:
+            max_shares = max_size / df_lots.loc[i, 'price']
+            for j in range(int(mkt_vals[i] // max_size)):
+                df_new.loc[idx] = df_lots.loc[i]
+                df_new.loc[idx, 'shares'] = max_shares
+                df_lots.loc[i, 'shares'] -= max_shares
+                idx += 1
+
+        self.df_lots = pd.concat([df_lots, df_new], axis=0)
+        return list(range(n_lots, n_lots+n_new_lots))
 
     def process_lots(self, taxes: dict, t_date: dt.datetime) -> None:
         """ Pre-process lots and create the necessary np arrays for fast calculation of taxes
@@ -410,7 +443,7 @@ class PortLots:
         df_lots = df_lots[df_lots['shares'] > config.tol]
 
         # Append new buy lots to the dataframe
-        #TODO - filter out zero lots before appending
+        # TODO - filter out zero lots before appending
         df_new_lots = pd.DataFrame(trades)
         df_new_lots['price'] = self.df_stocks['price']
         df_new_lots = df_new_lots[trades > 0].reset_index()
@@ -439,7 +472,7 @@ class PortLots:
 
         return data_dict
 
-#    def reset_clock(self, reset_thresh: float = 0, lt_cutoff: Optional[dt.date] = None) -> float:
+    #    def reset_clock(self, reset_thresh: float = 0, lt_cutoff: Optional[dt.date] = None) -> float:
     def reset_clock(self, reset_thresh: float = 0) -> float:
 
         """ Sell and buy-back long-term positions so that they can be used again
@@ -528,4 +561,3 @@ class PortLots:
         res['port_val'] = self.port_value
 
         return res
-

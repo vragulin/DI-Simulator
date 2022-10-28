@@ -91,5 +91,5 @@ test_no_random_60['harvest_freq'] = test60['dt']
 test_no_random_60['rebal_freq'] = test60['dt']
 
 # Test one set of parameters
-run_test_one_setting(test_don25)
+run_test_one_setting(test)
 print("Done")

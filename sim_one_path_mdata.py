@@ -88,11 +88,11 @@ if __name__ == "__main__":
     tic = time.perf_counter()  # Timer start
 
     # Load simulation parameters
-    input_file = 'inputs/config_test500_opt.xlsx'
+    input_file = 'inputs/config_test10_opt.xlsx'
     params = load_params(input_file)
 
     # Load simulation data files
-    dir_path = 'data/test_data_500'
+    dir_path = 'data/test_data_100'
     data_files = {'px': os.path.join(dir_path, 'prices.pickle'),
                   'tri': os.path.join(dir_path, 't_rets.pickle'),
                   'w': os.path.join(dir_path, 'daily_w.pickle')}

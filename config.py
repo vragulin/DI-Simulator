@@ -6,7 +6,7 @@ import numpy as np
 
 # Annualization factor
 ANN_FACTOR = 240
-EMBA_IRR_Factor = 252/240
+EMBA_IRR_Factor = 252 / 240
 LT_TAX_DAYS = 252
 DEBUG_MODE = True
 # USE_EMBA_LT_CUT_OFF = True  # Tried to match lt_classification from EMBA but it's too messy
@@ -36,8 +36,15 @@ trx_cost = 0
 # Random seed for numpy
 np.random.seed(7)
 
+# Maximum lot size (used in 3-step) as percent of max_harvest, split lots that are over this size
+max_lot_prc = 0.25  # 0.25
+
 # Max iterations in the optimizer
 maxiter = 100
+
+# Parameters for the 3-stage harvest
+prc_3step_hvst = 0.4  # stocks to earmark for 3-stage harvest as % of total harvest candidates
+prc_3step_buy = 0.5  # buy
 
 # Data location for market data simulator
 # working_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp_clean/"

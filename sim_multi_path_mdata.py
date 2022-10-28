@@ -182,8 +182,8 @@ if __name__ == "__main__":
     #            'weights': f"{path_data_dir}/path_weights_replace_60.csv"}
 
     # path_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/mkt_data_15y/paths"
-    # path_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/test_data_500/paths"
-    path_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/test_data_5y_500/paths"
+    path_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/mkt_data_20y/paths"
+    # path_dir = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/test_data_100/paths"
     dt = params['dt']
     p_files = {'base_dict': os.path.join(path_dir, f'base_data_dict_{dt}.pickle'),
                'shuffles': os.path.join(path_dir, f'path_shuffles_{dt}.csv'),
