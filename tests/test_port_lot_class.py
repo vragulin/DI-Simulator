@@ -30,6 +30,7 @@ def port() -> PortLots:
 
 
 def test_load1(port: PortLots):
+
     """ Loaded correct number of stocks """
     assert len(port.df_stocks) == 10
 

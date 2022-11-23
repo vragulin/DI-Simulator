@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Optional
 from copy import deepcopy
+from enum import Flag
 
 import pandas as pd
 import numpy as np
@@ -18,6 +19,14 @@ import config
 import fast_lot_math as flm
 from dateutil.relativedelta import relativedelta
 from pretty_print import df_to_format
+
+
+# Class for Lot Disposal Methods
+class DispMethod(Flag):
+    LTFO = 1  # Least Tax First Out
+    TSST = 2  # Short-term High-to-Low basis, then LT HIFO
+    LTFO_ETF = 3  # Least Tax First Out, trade lots opened on the same day together based on the idx
+    TSST_ETF = 4  # Least Tax First Out, trade lots opened on the same day together based on the idx
 
 
 # Class Portfolio
@@ -231,15 +240,21 @@ class PortLots:
                 idx += 1
 
         self.df_lots = pd.concat([df_lots, df_new], axis=0)
-        return list(range(n_lots, n_lots+n_new_lots))
+        return list(range(n_lots, n_lots + n_new_lots))
 
-    def process_lots(self, taxes: dict, t_date: dt.datetime) -> None:
+    def process_lots(self, taxes: dict, t_date: dt.datetime,
+                     method: Optional[DispMethod] = None,
+                     sim_data: Optional[dict] = None) -> None:
         """ Pre-process lots and create the necessary np arrays for fast calculation of taxes
             Equivalent to the LotsLiability.__init__()
-        """
 
-        # TODO Ensure lots have been correctly sorted before we start analysis for t=2
-        # Alias some variables for brevity
+            :param taxes: dictionary with tax rates
+            :param t_date: rebalance date
+            :param method: disposal method for lots.  If None use LTFO
+            :param sim_data: simulation data dict if the method needs index or other data
+            :return:  sorts lots in the right order (of disposal) and adds tax an other columns
+        """
+        # Alias key variables for brevity
         df_stocks = self.df_stocks
         df_lots = self.df_lots
 
@@ -289,8 +304,43 @@ class PortLots:
                                           df_lots['tax rate'] * (df_lots['price'] - df_lots['basis']),
                                           df_lots['price'])
 
-        # Sort by tax per share
-        df_lots.sort_values(by=['ticker', 'tax per shr'], inplace=True)
+        #  Add index reference as of lot opening date if needed
+        if method is None: method = DispMethod.LTFO
+
+
+        #  Depending on the disposal method sort lots in order we will be selling them
+        if method == DispMethod.LTFO:
+            #  Sort by tax per share
+            df_lots.sort_values(by=['ticker', 'tax per shr'], inplace=True)
+
+        elif method == DispMethod.TSST:
+            # Fido's Time Sensitive Short-Term disposal method
+            df_lots.sort_values(by=['ticker', 'long_term', 'basis'], ascending=[True, True, False],
+                                inplace=True)
+
+        elif method in DispMethod.TSST_ETF | DispMethod.LTFO_ETF:
+            # Allocte lots based on open date and index value at that time (as if we trade an ETF)
+
+            df_idx = pd.DataFrame(sim_data['idx_vals'], index=sim_data['dates'], columns=['idx_val'])
+            df_lots['idx_basis'] = df_lots['start_date'].apply(lambda x: df_idx.loc[x, 'idx_val'])
+
+            if method == DispMethod.TSST_ETF:
+                try:
+                    df_lots.sort_values(by=['ticker', 'long_term', 'idx_basis'], ascending=[True, True, False],
+                                        inplace=True)
+                except KeyError:
+                    raise KeyError("df_lots should contain columns ['ticker', 'long_term', 'idx_basis']")
+
+            else:  # method == DispMethod.LTFO_ETF:
+                idx_price = df_idx.loc[t_date, 'idx_val']
+                df_lots['idx_tax_per_shr'] = np.where(df_lots['no_sells'] != 1,
+                                                      df_lots['tax rate'] * (idx_price - df_lots['idx_basis']),
+                                                      idx_price)
+
+                df_lots.sort_values(by=['ticker', 'idx_tax_per_shr'], inplace=True)
+
+        else:
+            raise NotImplementedError(f"Method = {method} not implemented")
 
         # Calculate column with cumsum for each ticker block (to be use for tax calcs)
         df_lots['cum_shrs'] = flm.intervaled_cumsum(df_lots['shares'].values, tkr_block_idx)
@@ -345,6 +395,10 @@ class PortLots:
         self.df_stocks = self.df_stocks[['w_tgt', 'w', 'w_actv', 'shares', 'price', 'mkt_vals',
                                          'no_buys', 'no_sells']]
 
+        # Update other attributes
+        self.w_tgt = self.df_stocks['w_tgt']
+        self.cash_w_tgt = 1.0 - self.w_tgt.sum()
+
     def sim_report(self) -> str:
         """ Pretty print details of the simplified simulation portfolio"""
 
@@ -395,7 +449,8 @@ class PortLots:
 
         return output
 
-    def rebal_sim(self, trades: pd.Series, sim_data: dict, t=0) -> dict:
+    def rebal_sim(self, trades: pd.Series, sim_data: dict, t: int = 0,
+                  method: DispMethod = DispMethod.LTFO) -> dict:
         """ Rebalance simulation"""
 
         # Lots must be sorted (pre-processed), otherwise we don't know how to do allocations
@@ -414,7 +469,6 @@ class PortLots:
         #     "Some trades exceeds max_sell."
 
         # Update macro variables
-        # Calculate post-rebalance portfoio metrics
         # Calculate post-rebalance portfoio metrics
         trx_cost = (np.abs(trades) * self.df_stocks['price'] * sim_data['trx_cost']).sum()
         self.port_value = self.port_value - trx_cost
@@ -443,18 +497,20 @@ class PortLots:
         df_lots = df_lots[df_lots['shares'] > config.tol]
 
         # Append new buy lots to the dataframe
-        # TODO - filter out zero lots before appending
         df_new_lots = pd.DataFrame(trades)
         df_new_lots['price'] = self.df_stocks['price']
-        df_new_lots = df_new_lots[trades > 0].reset_index()
-        df_new_lots.columns = ['ticker', 'shares', 'price']
-        df_new_lots['Id'] = np.arange(len(df_new_lots)) + max_id + 1
-        df_new_lots['start_date'] = self.t_date  # TODO - check if this is right
-        df_new_lots['basis'] = df_new_lots['price'] * (1 + sim_data['trx_cost'])
-        df_new_lots.set_index('Id', inplace=True)
+        df_new_lots = df_new_lots[trades > config.tol].reset_index()
+        if len(df_new_lots) > 0:
+            df_new_lots.columns = ['ticker', 'shares', 'price']
+            df_new_lots['Id'] = np.arange(len(df_new_lots)) + max_id + 1
+            df_new_lots['start_date'] = self.t_date  # TODO - check if this is right
+            df_new_lots['basis'] = df_new_lots['price'] * (1 + sim_data['trx_cost'])
+            df_new_lots.set_index('Id', inplace=True)
 
-        # Concatenate the old and the new lots, sort
-        self.df_lots = pd.concat([df_lots, df_new_lots])
+            # Concatenate the old and the new lots
+            self.df_lots = pd.concat([df_lots, df_new_lots])
+
+        # Sort
         self.df_lots.sort_values(by=['ticker', 'start_date'], inplace=True)
         self.df_lots.reset_index(drop=True, inplace=True)
 
@@ -493,7 +549,8 @@ class PortLots:
         # Identify reset logs, update basis and start data
         df_lots['reset_indic'] = (df_lots['%_gain'] >= reset_thresh) & df_lots['long_term']
         df_lots['basis'] = np.where(df_lots['reset_indic'], df_lots['price'], df_lots['basis'])
-        df_lots['start_date'] = np.where(df_lots['reset_indic'], self.t_date, df_lots['start_date'])
+        # df_lots['start_date'] = np.where(df_lots['reset_indic'], self.t_date, df_lots['start_date'])
+        df_lots['start_date'] = df_lots['start_date'].where(~df_lots['reset_indic'], self.t_date)
 
         # Calculate tax incurred in the reset
         reset_tax = np.sum(df_lots['reset_indic'] * df_lots['tax per shr'] * df_lots['shares'])
@@ -534,7 +591,8 @@ class PortLots:
 
         # Update start date and cost basis for the harvested lots
         df_lots['basis'] = np.where(df_lots['below_thresh'], df_lots['price'], df_lots['basis'])
-        df_lots['start_date'] = np.where(df_lots['below_thresh'], self.t_date, df_lots['start_date'])
+        # df_lots['start_date'] = np.where(df_lots['below_thresh'], self.t_date, df_lots['start_date'])
+        df_lots['start_date'] = df_lots['start_date'].where(~df_lots['below_thresh'], self.t_date)
         df_lots['harvest_trade'] = np.where(df_lots['below_thresh'], df_lots['shares'], 0)
 
         # Calculate tax incurred in the reset
@@ -559,5 +617,51 @@ class PortLots:
         res['harvest_trades'] = df_stocks['harvest_trade']
         res['harv_ratio'] = 1.0
         res['port_val'] = self.port_value
+        res['trx_cost'] = np.abs(df_stocks['harvest_trade']) @ df_stocks['price'] * config.trx_cost
 
         return res
+
+    def cf_during_period(self, t: int, sim_data: dict, net: bool = True) -> tuple:
+        """ Calculate portfolio divs and interest received during the period
+            (assume that all stocks just went on ex-div right before rebalance.
+
+            If t=0, there are no cash flows.
+
+            Interest is are based on prior period's interest rate.
+
+            Current positions (cash) are used for both divs (interest),
+            in effect, we assume that we have not rebalanced yet.
+
+            Div are calculated by multiplying current %div and position (as of t) by prior period's
+            share price.  If this is too constraining, consider adding more parameters (e.g. last period's
+            cash).
+
+            :param self: portfolio
+            :param t: index of the rebalance date
+            :param sim_data: simulation data
+            :param net: gross of net cash flows
+            :return: (dividends, interest)
+        """
+
+        if t > 0:
+            params = sim_data['params']
+            n_stocks = sim_data['div'].shape[1]
+
+            # Dividend calculation
+            stock_divs = sim_data['div'][t, :]
+            prices = sim_data['px'].values[t - 1, :]
+
+            shares = self.df_stocks['shares'].values
+            port_divs = (shares * prices) @ stock_divs
+
+            # Interest calculation
+            port_interest = self.cash * sim_data['cash_ret'].values[t - 1]
+
+            if net:
+                port_divs *= (1 - config.tax['div'])
+                port_interest *= (1 - config.tax['int'])
+
+            return port_divs, port_interest
+
+        else:
+            return 0, 0

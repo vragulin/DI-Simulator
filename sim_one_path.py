@@ -183,6 +183,8 @@ def process_input_data_from_xl(inputs: dict, return_override: float = None) -> d
                 'dates': inputs['dates'], 'tax': config.tax,
                 'params': inputs['params'], 'trx_cost': config.trx_cost}
 
+    vectorize_dict(out_dict, ['px', 'd_px', 'tri', 'd_tri', 'div', 'w'])
+
     return out_dict
 
 
@@ -215,7 +217,8 @@ def init_sim_hist(port: PortLots) -> list:
         'net_buy': 0
     }
 
-    sim_hist = [{'opt': opt, 'div': 0, 'rebal': rebal, 'donate': 0, 'clock_reset_tax': 0}]
+    sim_hist = [{'opt': opt, 'div': 0, 'interest': 0,
+                 'rebal': rebal, 'donate': 0, 'clock_reset_tax': 0}]
 
     return sim_hist
 
@@ -528,7 +531,7 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
     df_stocks['trade'] = df_lots.groupby(by='ticker')['trade'].sum()
 
     # Also sell stocks with w_actv > max_active_weight where we have long-term capital gains
-    if ('max_actv_wgt' in params) and (df_stocks['w_actv'] > params['max_active_wgt']).any():
+    if ('max_active_wgt' in params) and (df_stocks['w_actv'] > params['max_active_wgt']).any():
         # Identify long-term lots for stocks where we have excess overweights
         df_lots['for_cutting_pos'] = (df_lots['w_actv'] > params['max_active_wgt']) \
                                      & (df_lots['long_term']) \
@@ -611,7 +614,8 @@ def update_donate_old(port: PortLots, donate_thresh: float, donate_pct: float) -
         donate_amount = np.sum(df_lots['donate_indic'] * df_lots['mv'])
         donate_thresh += 0.02
     df_lots['basis'] = np.where(df_lots['donate_indic'], df_lots['price'], df_lots['basis'])
-    df_lots['start_date'] = np.where(df_lots['donate_indic'], port.t_date, df_lots['start_date'])
+    # df_lots['start_date'] = np.where(df_lots['donate_indic'], port.t_date, df_lots['start_date'])
+    df_lots['start_date'] = df_lots['start_date'].where(~df_lots['donate_indic'], port.t_date)
     # TODO - log what we have donated in a better way
     return donate_amount
 
@@ -661,16 +665,17 @@ def update_donate(port: PortLots, donate_thresh: float, donate_pct: float) -> fl
     # Update basis and start date on the donated lots
     df_lots['donate_indic'] = df_lots['donated'] > 0
     df_lots['basis'] = np.where(df_lots['donate_indic'], df_lots['price'], df_lots['basis'])
-    df_lots['start_date'] = np.where(df_lots['donate_indic'], port.t_date, df_lots['start_date'])
+    # df_lots['start_date'] = np.where(df_lots['donate_indic'], port.t_date, df_lots['start_date'])
+    df_lots['start_date'] = df_lots['start_date'].where(~df_lots['donate_indic'], port.t_date)
 
     # Check that we donated correct amount
+    total_donated = df_lots['donated'].sum()
     if config.DEBUG_MODE:
-        total_donated = df_lots['donated'].sum()
         assert pytest.approx(total_donated, rel=config.tol) \
                == np.minimum(donate_amount, np.max(df_lots['cum_mv'])), \
             f"Donate amount doea not match: target={donate_amount}, actual={total_donated}"
 
-    return donate_amount
+    return total_donated
 
 
 def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
@@ -887,7 +892,7 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     if 'donate' not in params:
         params['donate'] = 0
 
-    # Depending on prices source, process the data differntly
+    # Depending on prices source, process the data differently
     # later, it may be a good idea to merge these functions into one.
     if inputs.get('prices_from_pickle', False):
         sim_data = process_input_data_from_pickle(inputs)
@@ -898,8 +903,7 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     if algorithm == "optimizer":
         sim_data = init_optimizer(sim_data)
 
-    # Set up the initial portfolio matching t
-    # he index at t=0
+    # Set up the initial portfolio matching the index at t=0
     port = PortLots.init_portfolio_from_dict(sim_data)
     port.update_sim_data(sim_data=sim_data, t=0)
 
@@ -914,7 +918,7 @@ def run_sim(inputs: dict, suffix=None, dir_path: str = 'results/',
     for t in range(1, n_steps + 1):
 
         if verbose:
-            if t % 10 == 0:
+            if t % config.VERBOSE_FREQ == 0:
                 print(f"Step = {t}", end=",\t")
                 print(f"# lots: {len(port.df_lots)}", end=",\t")
                 print(f"# stocks: {len(port.df_stocks)}")
@@ -1028,7 +1032,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, filename=log_file,
                         format='%(message)s')
     # Run simulation
-    input_file = 'inputs/test100.xlsx'
+    input_file = 'inputs/test5.xlsx'
     inputs = load_sim_settings_from_file(input_file, randomize=False)
 
     # tic = time.perf_counter()

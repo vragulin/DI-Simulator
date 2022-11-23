@@ -97,6 +97,7 @@ def block_start_index_pd(df: pd.DataFrame, col='Ticker') -> np.array:
     nz = np.nonzero(prev_non_equal)
     return np.array(nz).astype(int).ravel()
 
+
 @njit
 def block_start_index(arr: np.ndarray) -> np.array:
     """ Calculate index of rows where new blocks of tickers start
@@ -113,7 +114,7 @@ def block_start_index(arr: np.ndarray) -> np.array:
 
 @njit
 def build_broadcast_index(sizes: np.array) -> np.array:
-    """ Build an index for broadcasting a variables from a stock column to a lots column """
+    """ Build an index for broadcasting a variable from a stock column to a lots column """
     nout = np.sum(sizes)
     out = np.zeros(nout, dtype=np.int32)
     counter = 0

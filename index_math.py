@@ -1,5 +1,6 @@
 """
 Useful functions to calculate index returns, weights, etc...
+This library assumes that an index is fully invested, i.e. has no cash
 """
 import numpy as np
 from typing import Optional, Union
