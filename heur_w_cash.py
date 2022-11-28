@@ -10,7 +10,7 @@ import config
 
 
 def heuristic_w_cash(port: PortLots, t: int, sim_data: dict, max_harvest: float = 0.5, log=False) -> dict:
-    """ Heuristic tax-harvesting
+    """ Heuristic tax-harvesting for an account that has cash as well as stocks
     """
 
     # We harvest lots by whether they are over/underweight and tax per dollar sold
@@ -175,7 +175,7 @@ def heuristic_w_cash(port: PortLots, t: int, sim_data: dict, max_harvest: float 
             # When portfolio is very concentrated.  In this case just reduce all sales proportionally.
             df_stocks['trade'] *= (mv_harvest - tot_mv_to_buy) / mv_harvest
 
-    elif tot_mv_to_buy < 0:
+    elif tot_mv_to_buy < -config.tol:  # 0:
         raise ValueError("Unable to meet both constraints. Probably there are too many 'no sell' stocks.")
 
     # Clean up - sort stocks in alphabetical order

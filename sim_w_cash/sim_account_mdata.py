@@ -23,8 +23,11 @@ from sim_one_path_mdata import load_params, load_data
 warnings.filterwarnings("ignore")
 
 
-def load_ac_data(data_files: dict, params: dict, fixed_alloc: Optional[float] = None) -> dict:
-    # Wrapper to load both index data and asset allocation
+def load_ac_data(data_files: dict, params: dict, fixed_alloc: Optional[float] = None,
+                 use_bmk: bool = True) -> dict:
+    """ Wrapper to load both index data and asset allocation
+        To run without a benchmark specify fixed_alloc = -1 (or another value not on the list)
+    """
     out_dict = load_data(data_files, params)
 
     # Load equity weights
@@ -49,8 +52,31 @@ def load_ac_data(data_files: dict, params: dict, fixed_alloc: Optional[float] = 
     out_dict['cash_ret'] = dfr[['cash_ret']]
     out_dict['cash_tri'] = dfr[['cash_tri']]
 
+    # Check if we have a benchmark for this fixed allocation - we will need that for tracking
+    out_dict['bmk_val'] = None
+
+    bmk_dir = Path('../data/benchmarks') / config.sim_code
+    bmk_code = data_files['bmk_code']
+
+    if use_bmk:
+        if fixed_alloc is None:
+            bmk_file = bmk_dir / f'elm_{bmk_code}_passive_tsst.csv'
+        elif fixed_alloc == 0.75:
+            bmk_file = bmk_dir / f'fix75_{bmk_code}_passive_tsst.csv'
+        elif fixed_alloc == 1.0:
+            bmk_file = bmk_dir / f'fix100_{bmk_code}_passive_tsst.csv'
+        else:
+            raise FileNotFoundError(f"Benchmark file not found")
+
+        if bmk_file.exists():
+            df_bmk = pd.read_csv(bmk_file, index_col='step')
+            out_dict['bmk_val'] = df_bmk[['port_val']]
+        else:
+            print(f"Warning: benchmark file not found: {bmk_file}")
+
     # Add numpy array versions of the series to the array
-    vectorize_dict(out_dict, ['eq_alloc', 'int_rate', 'cash_ret', 'cash_tri'])
+    vect_fields = ['eq_alloc', 'int_rate', 'cash_ret', 'cash_tri', 'bmk_val']
+    vectorize_dict(out_dict, vect_fields)
 
     return out_dict
 
@@ -70,7 +96,7 @@ if __name__ == "__main__":
                         format='%(message)s')
 
     # Load simulation parameters
-    input_file = '../inputs/config_ac_test10.xlsx'
+    input_file = '../inputs/config_ac_mkt_20y.xlsx'
     params = load_params(input_file)
 
     # Load simulation data files
@@ -78,14 +104,24 @@ if __name__ == "__main__":
     data_files = {'px': dir_path / config.PX_PICKLE,
                   'tri': dir_path / config.TR_PICKLE,
                   'w': dir_path / config.W_PICKLE,
-                  'eq_alloc': dir_path / config.EQ_ALLOC_PICKLE}
+                  'eq_alloc': dir_path / config.EQ_ALLOC_PICKLE,
+                  'bmk_code': 'ret7'}
 
-    # data_dict = load_ac_data(data_files, params, fixed_alloc=0.75)
-    data_dict = load_ac_data(data_files, params)
+    data_dict = load_ac_data(data_files, params, fixed_alloc=1.0)
+    # data_dict = load_ac_data(data_files, params)
 
     # Set lot disposition method
     data_dict['disp_method'] = DispMethod.LTFO
     print(f"Disp Method = {data_dict['disp_method'].name}")
+
+    # Log run parameters
+    logging.info("Run Parameters:")
+    logging.info(params)
+    logging.info('\nData Files location:')
+    logging.info(data_files)
+    logging.info('\nDisposition method:')
+    logging.info(data_dict['disp_method'].name)
+    logging.info('\nStart Simulation:')
 
     # Start the simulation
     sim_stats, step_report = run_sim_w_cash(data_dict, suffix=timestamp)
@@ -98,3 +134,9 @@ if __name__ == "__main__":
     print("\nSimulation statistics (%):")
     print(df_to_format(pd.DataFrame(sim_stats * 100, columns=["annualized (%)"]), formats={'_dflt': '{:.2f}'}))
     print("\nDone")
+
+# TODO: for heuristic measure tracking in some way.
+#      pretty simple - just need to specify data file with benchmark returns for each run
+#      and then calculate stdev of tracking.  Maybe write function for it, so that I can do it
+#      in a single line - I already have this info in a 'steps' file.  So all I have to do is
+#      provide a reference to the steps file with the data and calc tracking.

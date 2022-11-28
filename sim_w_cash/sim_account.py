@@ -21,6 +21,7 @@ from port_lots_class import PortLots, DispMethod
 from sim_one_path import log_port_report, init_sim_hist, trade_history, \
     pd_to_csv, init_optimizer, update_donate
 from pretty_print import df_to_format
+from heur_w_cash import heuristic_w_cash
 
 warnings.filterwarnings("ignore")
 
@@ -87,7 +88,7 @@ def process_input_data(inputs: dict, input_from_xl: bool = False) -> dict:
     # Adjust returns to match target if needed
     if params['ret_override_flag']:
         n_steps = len(px) - 1
-        idx_period_ret = (idx_vals.ravel()[-1] / idx_vals.ravel()[0])**(1/n_steps) - 1
+        idx_period_ret = (idx_vals.ravel()[-1] / idx_vals.ravel()[0]) ** (1 / n_steps) - 1
         tgt_period_ret = (1 + params['ret_override']) ** (dt / config.ANN_FACTOR / config.EMBA_IRR_Factor) - 1
         adj_factor = (1 + tgt_period_ret) / (1 + idx_period_ret) - 1
 
@@ -130,7 +131,7 @@ def process_input_data(inputs: dict, input_from_xl: bool = False) -> dict:
                 'cash_ret': cash_ret, 'cash_tri': cash_tri,
                 'div': div, 'w': w_adj, 'idx_div': idx_div,
                 'idx_vals': idx_vals, 'idx_tri': idx_tri,
-                'dates': dates, 'tax': config.tax,
+                'bmk_vals': inputs['bmk_val'], 'dates': dates, 'tax': config.tax,
                 'params': inputs['params'], 'trx_cost': config.trx_cost}
 
     vectorize_dict(out_dict, ['px', 'd_px', 'eq_alloc', 'int_rate', 'cash_ret', 'cash_tri',
@@ -168,7 +169,7 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
     # Load simulation parameters from file
     params = inputs['params']
     disp_method = inputs.get('disp_method', DispMethod.LTFO)
-    max_harvest = inputs.get('max_harvest')
+    max_harvest = inputs['params'].get('max_harvest', config.MAX_HVST_DFLT)
 
     try:
         n_steps = int(params['n_steps'])
@@ -225,36 +226,47 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
         logging.info("\nBefore rebalance:")
         log_port_report(port, t)
 
-        # Rebalance portfolio to match target weights
         t_date = sim_data['dates'][t]
-        port.process_lots(sim_data['tax'], t_date, method=inputs.get('disp_method'), sim_data=sim_data)
 
-        # Calculate the rebalance
-        opt_res = {
-            'opt_trades': -port.df_stocks['w_actv'] * port.port_value / port.df_stocks['price'],
-            'harvest': np.nan,
-            'potl_harvest': np.nan,
-            'harv_ratio': np.nan,
-            'port_val': port.port_value
-        }
+        # Execute the rebalance depending on the chosen algo
+        if algorithm in ['passive', 'inst_replace']:
 
-        logging.info("Trades:")
-        logging.info(opt_res['opt_trades'])
+            # Recalculate and sort the lots array in the right way
+            port.process_lots(sim_data['tax'], t_date, method=inputs.get('disp_method'), sim_data=sim_data)
 
-        # Execute the rebalance (for now don't worry about donations
-        rebal_res = port.rebal_sim(opt_res['opt_trades'], sim_data, t=t,
-                                   method=disp_method)
+            # Calculate the rebalance
+            opt_res = {
+                'opt_trades': -port.df_stocks['w_actv'] * port.port_value / port.df_stocks['price'],
+                'harvest': np.nan,
+                'potl_harvest': np.nan,
+                'harv_ratio': np.nan,
+                'port_val': port.port_value
+            }
 
-        logging.info("\nRebal Trades:")
-        logging.info(opt_res['opt_trades'])
+            logging.info("Trades:")
+            logging.info(opt_res['opt_trades'])
 
-        if algorithm == 'inst_replace':
-            # Keeping portfolio weights constant harvest the remaining lots
-            hvst_res = port.harvest_inst_replace(t, sim_data)
-            merge_rebal_harvest(opt_res=opt_res, rebal_res=rebal_res, hvst_res=hvst_res)
+            # Execute the rebalance (for now don't worry about donations
+            rebal_res = port.rebal_sim(opt_res['opt_trades'], sim_data, t=t,
+                                       method=disp_method)
 
-            logging.info("\nHarvest Trades:")
-            logging.info(opt_res['harvest_trades'])
+            logging.info("\nRebal Trades:")
+            logging.info(opt_res['opt_trades'])
+
+            if algorithm == 'inst_replace':
+                # Keeping portfolio weights constant harvest the remaining lots
+                hvst_res = port.harvest_inst_replace(t, sim_data)
+                merge_rebal_harvest(opt_res=opt_res, rebal_res=rebal_res, hvst_res=hvst_res)
+
+                logging.info("\nHarvest Trades:")
+                logging.info(opt_res['harvest_trades'])
+
+        elif algorithm == 'heuristic':
+            opt_res = heuristic_w_cash(port, t, sim_data, max_harvest)
+            rebal_res = port.rebal_sim(trades=opt_res['opt_trades'], sim_data=sim_data, t=t)
+
+        else:
+            raise NotImplementedError(f"Algo {algorithm} not implemented")
 
         logging.info(f"\nHarvest={opt_res['harvest']:.4f}, "
                      f"Potl Harvest={opt_res['potl_harvest']:.4f}, "
@@ -359,10 +371,15 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
     # Pack results into a datframe:
     sim_stats['liq_tax%'] = port_liq_tax / df_report.iloc[-1]['port_val']
 
-    # Re-arrange sim_stats fields in logical order
-    new_order = ['port_irr', 'harvest%', 'liq_tax%']
+    # Calculate tracking
+    if sim_data['bmk_vals'] is not None:
+        df_report['bmk_val'] = sim_data['bmk_vals']
+        df_report['tracking'] = np.log(df_report['port_val'] / df_report['bmk_val']).diff()
+        sim_stats['tracking'] = df_report['tracking'].std() * np.sqrt(freq)
 
-    sim_stats = sim_stats.reindex(index=new_order)
+    # Re-arrange sim_stats fields in logical order
+    sim_stats = sim_stats.reindex(index=['port_irr', 'harvest%', 'liq_tax%', 'tracking'])
+
     return df_report, sim_stats
 
 

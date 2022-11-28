@@ -655,7 +655,7 @@ class PortLots:
             port_divs = (shares * prices) @ stock_divs
 
             # Interest calculation
-            port_interest = self.cash * sim_data['cash_ret'].values[t - 1]
+            port_interest = self.cash * sim_data['cash_ret'].values.ravel()[t - 1]
 
             if net:
                 port_divs *= (1 - config.tax['div'])

@@ -54,9 +54,10 @@ prc_3step_buy = 0.5  # buy
 
 # Parameters of the heuristic with cash optimizer
 threshold_step_prc = 0.05  # fraction of lots that we add at each iteration
+MAX_HVST_DFLT = 0.6
 
 # Data location for market data simulator
-sim_code = 'mkt_clean'
+sim_code = 'mkt_20y'
 
 # EQ_ALLOC_PICKLE = "eq_alloc.pickle"  # Use momentum based on 12m return
 MOMENTUM_SIG_TYPE = 'TRAIL_EX_1'
@@ -80,6 +81,12 @@ elif sim_code == 'mkt_clean':
 
 elif sim_code == 'mkt_full':
     WORKING_DIR = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp/"
+    PX_PICKLE = "idx_prices.pickle"
+    TR_PICKLE = "idx_t_rets.pickle"
+    W_PICKLE = "idx_daily_w.pickle"
+
+elif sim_code == 'mkt_20y':
+    WORKING_DIR = '../data/mkt_data_20y'
     PX_PICKLE = "idx_prices.pickle"
     TR_PICKLE = "idx_t_rets.pickle"
     W_PICKLE = "idx_daily_w.pickle"

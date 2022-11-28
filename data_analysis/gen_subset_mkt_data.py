@@ -69,7 +69,7 @@ def filter_data(inputs: dict, idx_tickers: Optional[list], start_date: Optional[
 
 if __name__ == "__main__":
 
-    n_years = 15
+    n_years = 20
     end_date = dt.date(2022, 6, 1)
     start_date = end_date + relativedelta(years=-n_years)
 
