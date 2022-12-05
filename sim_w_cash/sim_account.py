@@ -373,9 +373,15 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
 
     # Calculate tracking
     if sim_data['bmk_vals'] is not None:
-        df_report['bmk_val'] = sim_data['bmk_vals']
-        df_report['tracking'] = np.log(df_report['port_val'] / df_report['bmk_val']).diff()
-        sim_stats['tracking'] = df_report['tracking'].std() * np.sqrt(freq)
+        if len(sim_data['bmk_vals']) == len(df_report):
+            df_report['bmk_val'] = sim_data['bmk_vals']
+            df_report['tracking'] = np.log(df_report['port_val'] / df_report['bmk_val']).diff()
+            sim_stats['tracking'] = df_report['tracking'].std() * np.sqrt(freq)
+        else:
+            print(f"\nWarning benchmark and sim length don't match!\n"
+                  f"bmk length = {len(sim_data['bmk_vals'])}, "
+                  f"sim_length = {len(df_report)}.\n"
+                  f"Ignoring benchmark.\n")
 
     # Re-arrange sim_stats fields in logical order
     sim_stats = sim_stats.reindex(index=['port_irr', 'harvest%', 'liq_tax%', 'tracking'])

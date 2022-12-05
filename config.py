@@ -27,11 +27,16 @@ max_rise = 99  # this is recommended to avoid having index with very large singl
 # -----------------------------
 DEBUG_MODE = True
 VERBOSE_FREQ = 20  # frequency of printouts of simulation stats (in terms of # steps)
-t_last = datetime.date(2022, 8, 1)  # Final date of the simulation
+
+# Simulation range (crop the original data to only use this simulation range)
+CROP_RANGE = True
+t_start = datetime.date(1993, 1, 1)  # Start of the simulation
+t_end = datetime.date(2013, 3, 1)  # Final date of the simulation
 
 # Tax Rates
 # tax = {'st': 0., 'lt': 0}
 tax = {'st': 0.50, 'lt': 0.28}
+# tax['st'] = tax['lt']
 tax['div'] = tax['lt']
 tax['int'] = tax['st']
 
@@ -57,7 +62,7 @@ threshold_step_prc = 0.05  # fraction of lots that we add at each iteration
 MAX_HVST_DFLT = 0.6
 
 # Data location for market data simulator
-sim_code = 'mkt_20y'
+sim_code = 'mkt_clean'
 
 # EQ_ALLOC_PICKLE = "eq_alloc.pickle"  # Use momentum based on 12m return
 MOMENTUM_SIG_TYPE = 'TRAIL_EX_1'

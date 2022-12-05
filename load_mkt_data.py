@@ -4,10 +4,11 @@
 import os
 import numpy as np
 import pandas as pd
-from typing import Optional
+from typing import Optional, Any
 from enum import Enum
 import index_math as im
 import config as cnf
+import datetime
 from rescale_stock_paths import rescale_stocks_to_match_idx
 
 
@@ -24,6 +25,49 @@ def vectorize_dict(data_dict: dict, fields: list) -> None:
                 data_dict[k + '_arr'] = data_dict[k]
         except KeyError:
             raise KeyError(f"Field {k} not in data_dict.")
+
+
+def crop_dframe(df: pd.DataFrame, t_start: Optional[datetime.date] = None,
+                t_end: Optional[datetime.date] = None) -> pd.DataFrame:
+    """ Crop price or return dataframe if t_start / t_end have been specified
+        :param df: original dataframe, index_col = dates
+        :param t_start: stard date (closed interval)
+        :param t_end: end date (closed interval)
+        :return: dataframe with cropped data
+    """
+
+    if (t_start is None) and (t_end is None):
+        return df
+    else:
+
+        d_start = d_end = None
+        df1 = df.copy()
+
+        # Convert to date to datetime
+        if t_start is not None:
+            d_start = datetime.datetime(t_start.year, t_start.month, t_start.day)
+            df1 = df1[df1.index >= d_start]
+
+        if t_end is not None:
+            d_end = datetime.datetime(t_end.year, t_end.month, t_end.day)
+            df1 = df1[df1.index <= d_end]
+
+        return df1
+
+
+def read_crop_pickle(file: Any, range_info: Optional[dict] = None):
+    """ Wrapper around pd.read_pickle() that also crops the output dataframe
+        plus fills empty rows
+    """
+
+    df0 = pd.read_pickle(file)
+    if range_info is None:
+        return df0
+    else:
+        t_start = range_info.get('t_start')
+        t_end = range_info.get('t_end')
+        df = crop_dframe(df0, t_start=t_start, t_end=t_end)
+        return df
 
 
 def process_mkt_data(input: dict, data_freq: int, randomize: bool = False,
@@ -64,7 +108,7 @@ def process_mkt_data(input: dict, data_freq: int, randomize: bool = False,
 
 def load_mkt_data(data_files: dict, data_freq: int, filter_params: Optional[dict] = None,
                   fixed_weights: bool = False, rand_w: bool = True,
-                  rand_seed: Optional[int] = None) -> dict:
+                  rand_seed: Optional[int] = None, range_info: Optional[dict] = None) -> dict:
     """
     load market data from files and do some simple processing
     :param data_files: dictionary with paths to pickle files with data
@@ -75,13 +119,15 @@ def load_mkt_data(data_files: dict, data_freq: int, filter_params: Optional[dict
     :param rand_seed: random seed used to generate random weights (for replicatbility)
     :param fixed_weights: if True assume fixed index weights for the stocks, otherwise, assume equal shares
                             (and weights evolve in line with stock prices)
+    :param range_info: specify date range we want to load
     :return: dict of arrays with prices, returns, weights to be used for analysis
              no re-scaling or randomization in this function - this will be done in a separate
              function
     """
 
     # Load data from files
-    px = pd.read_pickle(data_files['px']).fillna(method='ffill').fillna(0)
+    # px = pd.read_pickle(data_files['px']).fillna(method='ffill').fillna(0)
+    px = read_crop_pickle(data_files['px'], range_info=range_info).fillna(method='ffill').fillna(0)
 
     # Check that stocks are alphabetically sorted, otherwise there may be issues later in the code.
     # TODO - in later versions teach the code to handle unsorted stock
@@ -92,13 +138,15 @@ def load_mkt_data(data_files: dict, data_freq: int, filter_params: Optional[dict
     px.index = range(0, len(px.index))
     px = px.reindex(index=dates_idx)
 
-    tri = pd.read_pickle(data_files['tri']).fillna(method='ffill').fillna(0)
+    # tri = pd.read_pickle(data_files['tri']).fillna(method='ffill').fillna(0)
+    tri = read_crop_pickle(data_files['tri'], range_info=range_info).fillna(method='ffill').fillna(0)
     tri.index = range(0, len(tri.index))
     tri = tri.reindex(index=dates_idx)
 
     # Load weights only if needed
     if not rand_w:
-        w = pd.read_pickle(data_files['w']).fillna(0)
+        # w = pd.read_pickle(data_files['w']).fillna(0)
+        w = read_crop_pickle(data_files['w'], range_info=range_info).fillna(0)
         w.index = range(0, len(w.index))
         w = np.maximum(0, w.reindex(index=dates_idx))
     else:

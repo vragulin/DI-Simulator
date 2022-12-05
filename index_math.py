@@ -169,7 +169,7 @@ def irr_solve(cf: np.array, dt: int, ann_factor: float = 252, guess: float = 0.0
     :param guess: intiial guess for r
     :param bounds: bounds tuple (lb, up)
     :param freq: frequency of the calculated IRR (default None, or continuous)
-    :return: exponential IRR
+    :return: IRR in the desired frequency (or exponential if not specified)
     """
     x0 = np.asarray(guess)
     r = minimize(irr_obj, x0, args=(cf, dt, ann_factor), bounds=[bounds]).x

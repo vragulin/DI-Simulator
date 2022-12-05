@@ -661,6 +661,7 @@ class PortLots:
                 port_divs *= (1 - config.tax['div'])
                 port_interest *= (1 - config.tax['int'])
 
+
             return port_divs, port_interest
 
         else:

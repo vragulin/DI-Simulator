@@ -60,7 +60,7 @@ def load_sim_settings_from_file(file: str, randomize=False) -> dict:
         rng = np.random.default_rng(2022)
 
     # Array of rebalance dates (so that we finish arond today)
-    rebal_dates = sorted([config.t_last + du.relativedelta(months=-3 * x) for x in range(n_steps + 1)])
+    rebal_dates = sorted([config.t_end + du.relativedelta(months=-3 * x) for x in range(n_steps + 1)])
 
     # Pack into a dictionary
     input_dict = {'w_idx': w_idx, 'stk_info': stk_info, 'prices': prices,

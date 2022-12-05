@@ -14,13 +14,29 @@ from typing import Optional
 from contextlib import suppress
 
 import config
-from load_mkt_data import vectorize_dict, load_mkt_data
+from load_mkt_data import vectorize_dict, crop_dframe
 from pretty_print import df_to_format
 from sim_account import run_sim_w_cash
 from port_lots_class import DispMethod
 from sim_one_path_mdata import load_params, load_data
 
 warnings.filterwarnings("ignore")
+
+
+def load_params_n_range(file: str) -> dict:
+    """
+    Wrapper to add simulation range info to the params
+    :param file: file path where parameter xls or csv file reside
+    :return: dictionary with parameter values
+    """
+
+    out_dict = load_params(file)
+    if config.CROP_RANGE:
+        range_info = {'t_start': config.t_start,
+                      't_end': config.t_end}
+        out_dict['range_info'] = range_info
+
+    return out_dict
 
 
 def load_ac_data(data_files: dict, params: dict, fixed_alloc: Optional[float] = None,
@@ -31,12 +47,18 @@ def load_ac_data(data_files: dict, params: dict, fixed_alloc: Optional[float] = 
     out_dict = load_data(data_files, params)
 
     # Load equity weights
+    range_info = params.get('range_info')
+
     if fixed_alloc is None:
         df_alloc = pd.read_pickle(data_files['eq_alloc'])
     else:
         df_alloc = pd.DataFrame(fixed_alloc,
                                 index=out_dict['dates'][out_dict['dates_idx']],
                                 columns=['eq_alloc'])
+
+    if range_info is not None:
+        df_alloc = df_alloc.reindex(out_dict['dates'][out_dict['dates_idx']],
+                         method='nearest')
 
     out_dict['eq_alloc'] = df_alloc[['eq_alloc']]
 
@@ -71,6 +93,11 @@ def load_ac_data(data_files: dict, params: dict, fixed_alloc: Optional[float] = 
         if bmk_file.exists():
             df_bmk = pd.read_csv(bmk_file, index_col='step')
             out_dict['bmk_val'] = df_bmk[['port_val']]
+
+            # Log benchmark used
+            for func in [print, logging.info]:
+                func(f"Benchmark file: {bmk_file}")
+
         else:
             print(f"Warning: benchmark file not found: {bmk_file}")
 
@@ -79,6 +106,22 @@ def load_ac_data(data_files: dict, params: dict, fixed_alloc: Optional[float] = 
     vectorize_dict(out_dict, vect_fields)
 
     return out_dict
+
+
+def log_run_params():
+    """ Print run paramters both to the console and to the log file
+    """
+    for func in [print, logging.info]:
+        # Log run parameters
+        func("Run Parameters:")
+        func(params)
+        func('\nData Files location:')
+        func(data_files)
+        func('\nTax assumptions:')
+        func(config.tax)
+        func('\nDisposition method:')
+        func(data_dict['disp_method'].name)
+        func('\nStart Simulation:')
 
 
 # ***********************************************************
@@ -97,7 +140,7 @@ if __name__ == "__main__":
 
     # Load simulation parameters
     input_file = '../inputs/config_ac_mkt_20y.xlsx'
-    params = load_params(input_file)
+    params = load_params_n_range(input_file)
 
     # Load simulation data files
     dir_path = Path(config.WORKING_DIR)
@@ -105,25 +148,16 @@ if __name__ == "__main__":
                   'tri': dir_path / config.TR_PICKLE,
                   'w': dir_path / config.W_PICKLE,
                   'eq_alloc': dir_path / config.EQ_ALLOC_PICKLE,
-                  'bmk_code': 'ret7'}
+                  'bmk_code': '93_13_ret7'}
 
-    data_dict = load_ac_data(data_files, params, fixed_alloc=1.0)
-    # data_dict = load_ac_data(data_files, params)
+    # data_dict = load_ac_data(data_files, params, fixed_alloc=1.0)
+    data_dict = load_ac_data(data_files, params)
 
     # Set lot disposition method
     data_dict['disp_method'] = DispMethod.LTFO
-    print(f"Disp Method = {data_dict['disp_method'].name}")
-
-    # Log run parameters
-    logging.info("Run Parameters:")
-    logging.info(params)
-    logging.info('\nData Files location:')
-    logging.info(data_files)
-    logging.info('\nDisposition method:')
-    logging.info(data_dict['disp_method'].name)
-    logging.info('\nStart Simulation:')
 
     # Start the simulation
+    log_run_params()
     sim_stats, step_report = run_sim_w_cash(data_dict, suffix=timestamp)
 
     # Print results: step report + simulation statistics
@@ -134,9 +168,3 @@ if __name__ == "__main__":
     print("\nSimulation statistics (%):")
     print(df_to_format(pd.DataFrame(sim_stats * 100, columns=["annualized (%)"]), formats={'_dflt': '{:.2f}'}))
     print("\nDone")
-
-# TODO: for heuristic measure tracking in some way.
-#      pretty simple - just need to specify data file with benchmark returns for each run
-#      and then calculate stdev of tracking.  Maybe write function for it, so that I can do it
-#      in a single line - I already have this info in a 'steps' file.  So all I have to do is
-#      provide a reference to the steps file with the data and calc tracking.

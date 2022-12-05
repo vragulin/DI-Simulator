@@ -46,7 +46,8 @@ def load_data(data_files: dict, params: dict) -> dict:
     :param params: dictionary with global simulation settings (i.e. not specific to mkt data)
     """
 
-    mdata = load_mkt_data(data_files, params['dt'], rand_w=False)
+    range_info = params.get('range_info')
+    mdata = load_mkt_data(data_files, params['dt'], rand_w=False, range_info=range_info)
 
     params['n_steps'] = n_steps = len(mdata['d_px']) - 1
 
