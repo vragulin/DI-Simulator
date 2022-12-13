@@ -21,7 +21,6 @@ max_rise = 99  # this is recommended to avoid having index with very large singl
 # Random weights or use the first row of the input dataframe
 # RAND_WEIGHTS = True
 
-
 # -----------------------------
 # Simulation parameters
 # -----------------------------
@@ -30,8 +29,8 @@ VERBOSE_FREQ = 20  # frequency of printouts of simulation stats (in terms of # s
 
 # Simulation range (crop the original data to only use this simulation range)
 CROP_RANGE = True
-t_start = datetime.date(1993, 1, 1)  # Start of the simulation
-t_end = datetime.date(2013, 3, 1)  # Final date of the simulation
+t_start = datetime.date(2002, 6, 1)  # Start of the simulation
+t_end = datetime.date(2022, 6, 3)  # Final date of the simulation
 
 # Tax Rates
 # tax = {'st': 0., 'lt': 0}
@@ -62,7 +61,7 @@ threshold_step_prc = 0.05  # fraction of lots that we add at each iteration
 MAX_HVST_DFLT = 0.6
 
 # Data location for market data simulator
-sim_code = 'mkt_clean'
+sim_code = 'mkt_clean'  # Assume we have a 30yr simulation window
 
 # EQ_ALLOC_PICKLE = "eq_alloc.pickle"  # Use momentum based on 12m return
 MOMENTUM_SIG_TYPE = 'TRAIL_EX_1'
@@ -71,31 +70,18 @@ if MOMENTUM_SIG_TYPE == 'TRAIL_EX_1':
 else:
     EQ_ALLOC_PICKLE = "eq_alloc.pickle"  # Use momentum based on 12m return
 
-if sim_code == 'test_10':
-    WORKING_DIR = '../data/test_data_10'
-    # WORKING_DIR = r"C:/Users/vragu/OneDrive/Desktop/Proj/DI Sim/data/test_data_10/"
-    PX_PICKLE = "prices.pickle"
-    TR_PICKLE = "t_rets.pickle"
-    W_PICKLE = "daily_w.pickle"
-
-elif sim_code == 'mkt_clean':
-    WORKING_DIR = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp_clean/"
+if sim_code == 'mkt_clean':
+    DATA_DIR = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp_clean/"
     PX_PICKLE = "idx_prices.pickle"
     TR_PICKLE = "idx_t_rets.pickle"
     W_PICKLE = "idx_daily_w.pickle"
-
+    PATHS_DIR = '../data/elm_sims/mkt_clean/paths'
 elif sim_code == 'mkt_full':
-    WORKING_DIR = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp/"
+    DATA_DIR = r"C:/Users/vragu/OneDrive/Desktop/Proj/DirectIndexing/data/overnight_intrp/"
     PX_PICKLE = "idx_prices.pickle"
     TR_PICKLE = "idx_t_rets.pickle"
     W_PICKLE = "idx_daily_w.pickle"
-
-elif sim_code == 'mkt_20y':
-    WORKING_DIR = '../data/mkt_data_20y'
-    PX_PICKLE = "idx_prices.pickle"
-    TR_PICKLE = "idx_t_rets.pickle"
-    W_PICKLE = "idx_daily_w.pickle"
-
+    PATHS_DIR = '../data/elm_sims/mkt_full/paths'
 
 else:
     raise ValueError(f"Uknown sim_code={sim_code}")

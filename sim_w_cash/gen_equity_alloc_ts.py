@@ -24,14 +24,21 @@ def moving_average(x: Sequence, w: int) -> np.array:
     return conv[:len(x)]
 
 
-def norm_ma(x: Sequence, w: int) -> np.array:
+def norm_ma(x: Sequence, w: int, adj_start_val: bool = False) -> np.array:
     """ Compute a rolling moving average without a gap in the front
         Normalize std of the output to 1
         :param x: data (1-d array or list or other sequence)
+        :param adj_start_val: if True, taper the first w points so that the result starts at zero value
         :param w: window length
     """
     ma = moving_average(x, w)
-    return (ma - np.mean(ma)) / np.std(ma)
+    norm_shift = np.mean(ma)
+
+    if adj_start_val:
+        scale = np.minimum((np.ones(len(x)).cumsum() - 1) / w, 1)
+        norm_shift *= scale
+
+    return (ma - norm_shift) / np.std(ma)
 
 
 def gen_equity_weights(data_dict: dict, alloc_params: dict) -> pd.DataFrame:

@@ -14,7 +14,7 @@ from typing import Optional
 from contextlib import suppress
 
 import config
-from load_mkt_data import vectorize_dict, crop_dframe
+from load_mkt_data import vectorize_dict #  , crop_dframe
 from pretty_print import df_to_format
 from sim_account import run_sim_w_cash
 from port_lots_class import DispMethod
@@ -148,7 +148,7 @@ if __name__ == "__main__":
                   'tri': dir_path / config.TR_PICKLE,
                   'w': dir_path / config.W_PICKLE,
                   'eq_alloc': dir_path / config.EQ_ALLOC_PICKLE,
-                  'bmk_code': '93_13_ret7'}
+                  'bmk_code': 'ret7'}
 
     # data_dict = load_ac_data(data_files, params, fixed_alloc=1.0)
     data_dict = load_ac_data(data_files, params)

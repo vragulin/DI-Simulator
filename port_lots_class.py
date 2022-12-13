@@ -307,7 +307,6 @@ class PortLots:
         #  Add index reference as of lot opening date if needed
         if method is None: method = DispMethod.LTFO
 
-
         #  Depending on the disposal method sort lots in order we will be selling them
         if method == DispMethod.LTFO:
             #  Sort by tax per share
@@ -320,7 +319,6 @@ class PortLots:
 
         elif method in DispMethod.TSST_ETF | DispMethod.LTFO_ETF:
             # Allocte lots based on open date and index value at that time (as if we trade an ETF)
-
             df_idx = pd.DataFrame(sim_data['idx_vals'], index=sim_data['dates'], columns=['idx_val'])
             df_lots['idx_basis'] = df_lots['start_date'].apply(lambda x: df_idx.loc[x, 'idx_val'])
 
@@ -660,7 +658,6 @@ class PortLots:
             if net:
                 port_divs *= (1 - config.tax['div'])
                 port_interest *= (1 - config.tax['int'])
-
 
             return port_divs, port_interest
 

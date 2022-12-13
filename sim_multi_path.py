@@ -40,11 +40,13 @@ def process_path_stats(path_stats: list) -> tuple:
 
     # Adjust ratios to be unbiased (replace the average ratio with ratio of averages)
     if np.abs(sim_summary.loc['hvst_potl', 'Avg']) >= np.finfo(float).eps:
-        sim_summary.loc['hvst_grs/potl', 'Avg'] = sim_summary.loc['hvst_grs', 'Avg'] / sim_summary.loc['hvst_potl', 'Avg']
-        sim_summary.loc['hvst_net/potl', 'Avg'] = sim_summary.loc['hvst_net', 'Avg'] / sim_summary.loc['hvst_potl', 'Avg']
+        sim_summary.loc['hvst_grs/potl', 'Avg'] = sim_summary.loc['hvst_grs', 'Avg'] / sim_summary.loc[
+            'hvst_potl', 'Avg']
+        sim_summary.loc['hvst_net/potl', 'Avg'] = sim_summary.loc['hvst_net', 'Avg'] / sim_summary.loc[
+            'hvst_potl', 'Avg']
     if sim_summary.loc['tracking_std', 'Avg'] > config.tol:
-        sim_summary.loc['hvst_n/trckng', 'Avg'] = sim_summary.loc['hvst_net', 'Avg'] / sim_summary.loc['tracking_std', 'Avg']
-
+        sim_summary.loc['hvst_n/trckng', 'Avg'] = sim_summary.loc['hvst_net', 'Avg'] / sim_summary.loc[
+            'tracking_std', 'Avg']
 
     # Calculate statistics for each period (to track average dynamics of harvesting over time)
     step_rpt = pd.DataFrame(0, index=path_stats[0][1].index, columns=path_stats[0][1].columns)
