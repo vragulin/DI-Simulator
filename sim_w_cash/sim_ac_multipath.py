@@ -14,14 +14,18 @@ import matplotlib.pyplot as plt
 import index_math as im
 
 from pathlib import Path
+from codetiming import Timer
 from typing import Optional
 from contextlib import suppress
-from sim_one_path_mdata import load_params, load_data
+from load_mkt_data import vectorize_dict
+from sim_one_path import pd_to_csv
+from sim_one_path_mdata import load_data
 from sim_multi_path_mdata import gen_data_dict_emba
 from port_lots_class import DispMethod
 from sim_account import run_sim_w_cash
 from sim_account_mdata import load_params_n_range
 from gen_equity_alloc_ts import norm_ma
+from pretty_print import df_to_format
 
 import config  # Use a separate config file for the multi-path simulation
 
@@ -68,7 +72,7 @@ def init_path_info(base: dict, params: dict, path_files: dict = {},
             idx = shuffles[1].cumsum()
             for col in shuffles:
                 shuffles[col] = idx.sample(n_steps, replace=params['replace'],
-                                          random_state=params['rng'].bit_generator).values
+                                           random_state=params['rng'].bit_generator).values
         else:
             shuffle = shuffles.cumsum()
 
@@ -120,7 +124,7 @@ def gen_equity_alloc(data_dict: dict) -> pd.DataFrame:
 
     # Momentum = 12m return
     if config.MOMENTUM_SIG_TYPE == 'TRAIL_EX_1':
-        mom_win = int(1 * config.ANN_FACTOR / dt) -1
+        mom_win = int(1 * config.ANN_FACTOR / dt) - 1
         sig_mom0 = norm_ma(idx_rets[:, None], mom_win)
         sig_mom = sig_mom0 * 0
         sig_mom[1:] = sig_mom0[:-1]
@@ -151,7 +155,7 @@ def gen_equity_alloc(data_dict: dict) -> pd.DataFrame:
 
 
 def gen_path_n_alloc_data(i_path: int, path_info: dict, params: dict,
-                         log_stats: bool = False) -> dict:
+                          log_stats: bool = False) -> dict:
     """
     Generate path data and simulated equity allocation from sim parameters and path info files.
 
@@ -194,11 +198,110 @@ def gen_path_n_alloc_data(i_path: int, path_info: dict, params: dict,
                                 index=base['dates'][base['dates_idx']],
                                 columns=['eq_alloc'])
 
-    # Add interest rate info
+    data_dict['eq_alloc'] = df_alloc[['eq_alloc']]
 
-    # Get any other arrays needed for calculation
+    # Add interest rate info
+    int_rate = config.int_rate
+    dfr = pd.DataFrame(int_rate, index=df_alloc.index, columns=['int_rate'])
+
+    dt = data_dict['params']['dt']
+    dfr['cash_ret'] = dfr['int_rate'] * dt / config.ANN_FACTOR
+    dfr['cash_tri'] = (1 + dfr['cash_ret'].shift().fillna(0)).cumprod()
+
+    data_dict['int_rate'] = dfr[['int_rate']]
+    data_dict['cash_ret'] = dfr[['cash_ret']]
+    data_dict['cash_tri'] = dfr[['cash_tri']]
+
+    # Check if we have a benchmark for this fixed allocation - we will need that for tracking
+    # ToDo: think about my strategy for the benchmark
+    # Assume that we have save a file with benchmark performance for every path in config.PATHS_DIR
+    # Better strategy - load banchmark file during the set-up (i.e. before I start looping over paths)
+    # And then just pull the be respective path out of the data frame.
+
+    if params['use_benchmark']:
+        data_dict['bmk_val'] = data_dict['bmk_paths'][[i_path]]
+    else:
+        data_dict['bmk_val'] = None
+
+    # Add numpy array versions of the series to the array
+    vect_fields = ['eq_alloc', 'int_rate', 'cash_ret', 'cash_tri', 'bmk_val']
+    vectorize_dict(data_dict, vect_fields)
 
     return data_dict
+
+
+def process_path_stats(path_stats: list) -> tuple:
+    """ Compute average values of simualion results across a list of simulations
+        Each simulation statistic is a series
+        :param port_paths: list of dicts with portfolio path info
+        :result: tuple of sim_stats, sim_summary, step_rpt
+    """
+
+    n_paths = len(path_stats)
+
+    # Calculate statistics across the entire simulation period
+    sim_stats = pd.DataFrame(0, index=path_stats[0][0].index, columns=range(1, n_paths + 1))
+    for i, res in enumerate(path_stats):
+        sim_stats[i + 1] = res[0]
+
+    cols = ['Avg', 'Std', 'Max', 'Min']
+    funcs = [np.mean, np.std, np.max, np.min]
+    sim_summary = pd.DataFrame(0, index=sim_stats.index, columns=cols)
+
+    for col, func in zip(cols, funcs):
+        sim_summary[col] = func(sim_stats, axis=1)
+
+    # Calculate statistics for each period (to track average dynamics of harvesting over time)
+    step_rpt = pd.DataFrame(0, index=path_stats[0][1].index, columns=path_stats[0][1].columns)
+    cols = ['harvest', 'donate', 'div', 'interest', 'port_val']
+
+    # If benchmark has been given add its average performance to the table
+    if not np.isnan(sim_summary.loc['tracking', 'Avg']):
+        cols += ['bmk_val']
+
+    for res in path_stats:
+        one_path_rpt = res[1].fillna(0)
+        step_rpt[cols] += one_path_rpt[cols] / n_paths
+
+    return sim_stats, sim_summary, step_rpt
+
+
+def load_benchmark_data(data_dict, data_files) -> Optional[Path]:
+    """
+    Add benchmark data to the data_dict structure in place
+    :param data_dict: context market data + simulation params
+    :param data_files:  directory of data files and benchmark extension info
+    :returns: bmk_file full path or None if program failed
+    """
+    params = data_dict['params']
+    fixed_alloc = params.get('fixed_alloc')
+
+    data_dict['bmk_val'] = None
+    bmk_dir = Path(config.PATHS_DIR)
+    bmk_code = data_files['bmk_code']
+
+    if fixed_alloc is None:
+        bmk_file = bmk_dir / f'elm_{bmk_code}_passive_tsst.csv'
+    elif fixed_alloc == 0.75:
+        bmk_file = bmk_dir / f'fix75_{bmk_code}_passive_tsst.csv'
+    elif fixed_alloc == 1.0:
+        bmk_file = bmk_dir / f'fix100_{bmk_code}_passive_tsst.csv'
+    else:
+        raise FileNotFoundError(f"Benchmark file not found")
+
+    if bmk_file.exists():
+        df_bmk = pd.read_csv(bmk_file, index_col=0)
+        data_dict['bmk_paths'] = df_bmk
+        df_bmk.columns = [int(x) for x in df_bmk.columns]  # Set type of columns names to int
+
+        # Log benchmark used
+        for func in [print, logging.info]:
+            func(f"Benchmark file: {bmk_file}")
+
+    else:
+        print(f"Warning: benchmark file not found: {bmk_file}")
+
+    return df_bmk, bmk_file
 
 
 # ***********************************************************
@@ -206,11 +309,14 @@ def gen_path_n_alloc_data(i_path: int, path_info: dict, params: dict,
 # ***********************************************************
 if __name__ == "__main__":
     # Simulation parameters
-    n_paths = 5
+    n_paths = 25
     input_file = '../inputs/config_ac_multipath.xlsx'
     disp_method = DispMethod.LTFO
-    fixed_alloc = None # 1.0, 0.75
+    fixed_alloc = 1.0  # 1.0, 0.75
     gen_shuffles = True  # Load shuffle info, rather than generate it
+    use_benchmark = True
+    results_dir = '../results/multipath/'
+    bmk_code = 'r7_v16_p25'
 
     # Equity asset alloction parmeters
     alloc_params = {
@@ -221,8 +327,11 @@ if __name__ == "__main__":
     }
 
     # Start Simulation
+    timer_full_run = Timer(name="Full Run", text="Full run time: {seconds:.1f} sec")
+    timer_full_run.start()
+
     timestamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-    log_file = '../results/ac_w_cash/sim_' + timestamp + '.log'
+    log_file = results_dir + 'sim_' + timestamp + '.log'
 
     # Silently remove prior log_files and set up logger
     with suppress(OSError):
@@ -236,15 +345,21 @@ if __name__ == "__main__":
                                    disp_method=disp_method)
     params['alloc_params'] = alloc_params
     params['fixed_alloc'] = fixed_alloc
+    params['use_benchmark'] = use_benchmark
 
     # Load simulation data files
     data_dir = Path(config.DATA_DIR)
     data_files = {'px': data_dir / config.PX_PICKLE,
                   'tri': data_dir / config.TR_PICKLE,
-                  'w': data_dir / config.W_PICKLE}
+                  'w': data_dir / config.W_PICKLE,
+                  'bmk_code': bmk_code}
 
     # Load base data (common for all paths)
     base_dict = load_data(data_files, params)
+    base_dict['disp_method'] = disp_method
+
+    if use_benchmark:
+        bmk_paths, bmk_file = load_benchmark_data(base_dict, data_files)
 
     # Generate paths shuffles and starting weights
     paths_dir = Path(config.PATHS_DIR)
@@ -263,16 +378,54 @@ if __name__ == "__main__":
     # Run simulation - Loop over paths
     n_steps, n_stocks = path_info['shuffles'].shape[0], path_info['weights'].shape[1]
     path_stats = []
+    port_paths = pd.DataFrame(np.nan, index=range(n_steps + 1), columns=path_info['shuffles'].columns)
 
-    logging.info('Inputs:\n' + str(params) + '\n')
-    logging.info('\nConfig file: ' + input_file + '\n')
-    logging.info('\nPath Files:\n' + str(path_files) + '\n')
-    logging.info(f'#Paths: {n_paths}, #Steps: {n_steps}, #Stocks: {n_stocks}')
+    for func in [print, logging.info]:
+        func('Inputs:\n' + str(params) + '\n')
+        func('\nConfig file: ' + input_file + '\n')
+        func('\nPath Files:\n' + str(path_files) + '\n')
+        func(f'#Paths: {n_paths}, #Steps: {n_steps}, #Stocks: {n_stocks}\n')
+        func(f'Disp Method: {disp_method}\n')
+        if use_benchmark:
+            func(f'Benchmark file: {bmk_file}\n')
 
-    for i in range(1, n_paths+1):
+    for i in range(1, n_paths + 1):
         # ToDo: write the path_data_from_files function
-        data_dict = gen_path_n_alloc_data(i, path_info, params, log_stats = True)
         print(f"Running sim for path {i}")
-        # sim_stats, step_report  = run_sim_w_cash(data_dict, suffix=timestamp)
+        data_dict = gen_path_n_alloc_data(i, path_info, params, log_stats=True)
+        one_path_summary, one_path_steps = run_sim_w_cash(data_dict, suffix=timestamp,
+                                                          save_files=False)
 
+        path_stats.append((one_path_summary, one_path_steps))
+        port_paths[i] = one_path_steps['port_val']
+
+    # Process simulation results
+    sim_stats, sim_summary, steps_report = process_path_stats(path_stats)
+
+    # Print out results
+    print("\nSimuation results by path (annualized, %):")
+    print(df_to_format(sim_stats * 100, formats={'_dflt': '{:.2f}'}))
+    pd_to_csv(sim_stats, 'sim_stats', suffix=timestamp, dir_path=results_dir)
+
+    print("\nSimulation summary (annualized, %):")
+    print(df_to_format(sim_summary * 100, formats={'_dflt': '{:.2f}'}))
+    pd_to_csv(sim_summary, 'sim_summary', suffix=timestamp, dir_path=results_dir)
+
+    print("\nResults per period (%):")
+    pd_to_csv(steps_report, 'steps_report', suffix=timestamp, dir_path=results_dir)
+
+    # steps_report.drop(columns='hvst_potl') - drop some columns so that that the report fits the screen
+    pd.options.display.min_rows = 30
+    print(df_to_format(steps_report * 100,
+                       formats={'div': '{:.2f}', 'donate': '{:.2f}', 'interest': '{:.2f}',
+                                'port_val': '{:.2f}', 'bmk_val': '{:.2f}',
+                                '_dflt': '{:.4f}'}))
+
+    pd_to_csv(port_paths, 'port_paths', suffix=timestamp, dir_path=results_dir)
+
+    # ToDo: Investigate - why is harvest = nan in the log file?
+    # ToDo: Add a run with benchmark functionality - maybe next week since I don't have a lot of time left
+    # ToDo - add timer for the entire simulation (use codetimig librarary)
+
+    timer_full_run.stop()
     print("Done")

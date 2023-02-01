@@ -46,6 +46,8 @@ def process_input_data(inputs: dict, input_from_xl: bool = False) -> dict:
         :result: simulation data dictionary ('sim_data')
     """
     params = inputs['params']
+    freq = int(config.ANN_FACTOR / params['dt'])
+
 
     if input_from_xl:
         tickers = list(inputs['stk_info'].index)
@@ -72,6 +74,9 @@ def process_input_data(inputs: dict, input_from_xl: bool = False) -> dict:
         div[1:] = div_y_per_dt
     else:
         div = inputs['div_arr']
+        if params['div_override'] >= 0:
+            div *= 0.0
+            div[(px.index % freq == 0) & (px.index > 0)] = params['div_override']
 
     idx_div = np.zeros((px.shape[0], 1))
     idx_div[1:] = (div[1:] * px[:-1]) @ w_start
@@ -163,7 +168,7 @@ def merge_rebal_harvest(opt_res: dict, rebal_res: dict, hvst_res: dict, algorith
     return None
 
 
-@Timer(name="Simulation", text="Simulation time: {seconds:.1f} sec")
+@Timer(name="One path sim", text="One path simulation time: {seconds:.1f} sec")
 def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../results/ac_w_cash/',
                    verbose: bool = True, save_files: bool = True, log_file: str = None) -> tuple:
     # Load simulation parameters from file
@@ -200,7 +205,7 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
     port = PortLots.init_portfolio_from_dict(sim_data)
     port.update_sim_data(sim_data=sim_data, t=0)
 
-    log_port_report(port, 0)
+    # log_port_report(port, 0)
 
     # Loop over periods, rebalance / harvest at each period, keep track of P&L
     # Initialize a list to keep simulation info
@@ -223,8 +228,8 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
 
         # Revalue portfolio
         port.update_sim_data(sim_data=sim_data, t=t)
-        logging.info("\nBefore rebalance:")
-        log_port_report(port, t)
+        # logging.info("\nBefore rebalance:")
+        # log_port_report(port, t)
 
         t_date = sim_data['dates'][t]
 
@@ -243,34 +248,37 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
                 'port_val': port.port_value
             }
 
-            logging.info("Trades:")
-            logging.info(opt_res['opt_trades'])
+            # logging.info("Trades:")
+            # logging.info(opt_res['opt_trades'])
 
             # Execute the rebalance (for now don't worry about donations
             rebal_res = port.rebal_sim(opt_res['opt_trades'], sim_data, t=t,
                                        method=disp_method)
 
-            logging.info("\nRebal Trades:")
-            logging.info(opt_res['opt_trades'])
+            # logging.info("\nRebal Trades:")
+            # logging.info(opt_res['opt_trades'])
 
             if algorithm == 'inst_replace':
                 # Keeping portfolio weights constant harvest the remaining lots
                 hvst_res = port.harvest_inst_replace(t, sim_data)
                 merge_rebal_harvest(opt_res=opt_res, rebal_res=rebal_res, hvst_res=hvst_res)
 
-                logging.info("\nHarvest Trades:")
-                logging.info(opt_res['harvest_trades'])
+                # logging.info("\nHarvest Trades:")
+                # logging.info(opt_res['harvest_trades'])
 
         elif algorithm == 'heuristic':
+            #ToDo understand why it gives harvest = nan
             opt_res = heuristic_w_cash(port, t, sim_data, max_harvest)
             rebal_res = port.rebal_sim(trades=opt_res['opt_trades'], sim_data=sim_data, t=t)
 
         else:
             raise NotImplementedError(f"Algo {algorithm} not implemented")
 
-        logging.info(f"\nHarvest={opt_res['harvest']:.4f}, "
-                     f"Potl Harvest={opt_res['potl_harvest']:.4f}, "
-                     f"Ratio={opt_res['harv_ratio']:.3f}")
+        # logging.info(f"\nHarvest={opt_res['harvest']:.4f}, "
+        #              f"Potl Harvest={opt_res['potl_harvest']:.4f}, "
+        #              f"Ratio={opt_res['harv_ratio']:.3f}")
+        # logging.info(f"\nTax={rebal_res['tax']:.4f}, "
+        #              f"Net Buy={rebal_res['net_buy']:.4f}")
 
         # Donate
         if params['donate'] and (t * params['dt'] % params['donate_freq'] == 0):
