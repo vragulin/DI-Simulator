@@ -92,17 +92,34 @@ def process_input_data_from_pickle(inputs: dict) -> dict:
         div = d_px * 0
         div[(div.index % freq == 0) & (div.index > 0)] = params['div_override']
 
+    #ToDo - check that this logic works for Bloomberg
     if inputs['params']['benchmark_type'] == 'fixed_weights':
         idx_vals = (1 + (d_px * w_arr).sum(axis=1)).cumprod()
         idx_tri = (1 + (d_tri * w_arr).sum(axis=1)).cumprod()
         idx_div = (div * w_arr).sum(axis=1)
-    else:  # Fixed share index - basket does not change
+    elif inputs['params']['benchmark_type'] == 'fixed_shares':  # Fixed share index - basket does not change
         idx_vals = im.index_vals(w_arr[0], px.values)
         idx_div = np.zeros(idx_vals.shape)
         idx_div[1:] = (div.values[1:] * px.values[:-1]) @ w_arr[0]
 
         idx_tri = im.total_ret_index(w_arr[0], px.values, idx_div,
                                      idx_vals=idx_vals)
+    elif inputs['params']['benchmark_type'] == 'var_weights':  # Variable weigths, loaded from file
+        # Calculate index prices and price returns
+        idx_rets = (d_px * inputs['w'].shift(1)).sum(axis=1)
+        idx_rets[0] = 0
+        idx_vals = (1+idx_rets).cumprod()
+
+        # Calculate index dividends (in % and price points)
+        idx_div_yld = (div * inputs['w'].shift(1)).sum(axis=1)
+        idx_div_yld[0] = 0
+        idx_div = idx_div_yld * idx_vals.shift(1)
+
+        # Calculate index Total return (i.e. including dividends)
+        idx_tot_rets = idx_rets + idx_div_yld
+        idx_tri = (1+idx_tot_rets).cumprod()
+    else:
+        raise NotImplementedError(f"Invalid benchmark type: {inputs['params']['benchmark_type']}")
 
     # Calculate portfolio review dates
     dates = (pd.to_datetime(list(inputs['dates'])).date)[inputs['dates_idx']]
