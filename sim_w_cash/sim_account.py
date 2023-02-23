@@ -13,7 +13,7 @@ import config
 import numpy as np
 import index_math as im
 
-from typing import Optional
+from typing import Optional, Tuple
 from codetiming import Timer
 from contextlib import suppress
 from load_mkt_data import vectorize_dict
@@ -43,11 +43,10 @@ def process_input_data(inputs: dict, input_from_xl: bool = False) -> dict:
     """ Process inputs into a dictionary format that can be used for a simulation
         :param inputs: input dictionary
         :param input_from_xl: flag idicating whether the data was read form an Excel or a series of pickle files
-        :result: simulation data dictionary ('sim_data')
+        :return: simulation data dictionary ('sim_data')
     """
     params = inputs['params']
     freq = int(config.ANN_FACTOR / params['dt'])
-
 
     if input_from_xl:
         tickers = list(inputs['stk_info'].index)
@@ -62,10 +61,6 @@ def process_input_data(inputs: dict, input_from_xl: bool = False) -> dict:
     px = (1 + d_px).cumprod()
 
     dt = params['dt']
-    if input_from_xl:
-        w_start = inputs['w_idx'].values
-    else:
-        w_start = inputs['w_arr'][0, None].T
 
     # Calc dividend per period and convert into an array
     if input_from_xl:
@@ -78,17 +73,45 @@ def process_input_data(inputs: dict, input_from_xl: bool = False) -> dict:
             div *= 0.0
             div[(px.index % freq == 0) & (px.index > 0)] = params['div_override']
 
-    idx_div = np.zeros((px.shape[0], 1))
-    idx_div[1:] = (div[1:] * px[:-1]) @ w_start
+    bmk_type = inputs['params']['benchmark_type']
+    if bmk_type == 'fixed_shares':
+        if input_from_xl:
+            w_start = inputs['w_idx'].values
+        else:
+            w_start = inputs['w_arr'][0, None].T
+
+        idx_div = np.zeros((px.shape[0], 1))
+        idx_div[1:] = (div[1:] * px[:-1]) @ w_start
+
+        w = im.index_weights_over_time(w_start, px.values)
+        idx_vals = im.index_vals(w_start, px.values)
+        idx_tri = im.total_ret_index(w_start, px.values, idx_div * (1 - config.tax['div']))
+
+    elif bmk_type in ['var_weights', 'fixed_weights']:
+        # Calculate index prices and price returns
+        w = inputs['w']
+        idx_rets = (d_px * w.shift(1)).sum(axis=1)
+        idx_rets[0] = 0
+        idx_vals = (1 + idx_rets).cumprod()
+
+        # idx_vals1, idx_rets1 = im.index_vals_from_weights(inputs['w'].values, px.values)
+        # np.testing.assert_allclose(idx_vals.values, idx_vals1)
+        # np.testing.assert_allclose(idx_vals.values, idx_vals1)
+
+        # Calculate index dividends (in % and price points)
+        idx_div_yld = (div * w.shift(1)).sum(axis=1)
+        idx_div_yld[0] = 0
+        idx_div = idx_div_yld * idx_vals.shift(1)
+
+        # Calculate index Total return (i.e. including dividends)
+        idx_tot_rets = idx_rets + idx_div_yld
+        idx_tri = (1 + idx_tot_rets).cumprod()
+    else:
+        raise NotImplementedError(f"Invalid benchmark type: {inputs['params']['benchmark_type']}")
 
     # Calc total return
     d_tri = d_px + div
-    # d_tri.iloc[0, :] = 0  #  Don't need because top row is zero anyway
     tri = (1 + d_tri).cumprod()
-
-    w = im.index_weights_over_time(w_start, px.values)
-    idx_vals = im.index_vals(w_start, px.values)
-    idx_tri = im.total_ret_index(w_start, px.values, idx_div * (1 - config.tax['div']))
 
     # Adjust returns to match target if needed
     if params['ret_override_flag']:
@@ -100,18 +123,36 @@ def process_input_data(inputs: dict, input_from_xl: bool = False) -> dict:
         d_px.iloc[1:] = (1 + d_px.iloc[1:]) * (1 + adj_factor) - 1
         px = (1 + d_px).cumprod()
 
-        # Recalculate all other series to match target return
-        idx_div = np.zeros((px.shape[0], 1))
-        idx_div[1:] = (div[1:] * px[:-1]) @ w_start
-
-        # Calc total return
+        # Calc total return for the stocks
         d_tri = d_px + div
-        # d_tri.iloc[0, :] = 0  #  Don't need because top row is zero anyway
         tri = (1 + d_tri).cumprod()
 
-        w = im.index_weights_over_time(w_start, px.values)
-        idx_vals = im.index_vals(w_start, px.values)
-        idx_tri = im.total_ret_index(w_start, px.values, idx_div * (1 - config.tax['div']))
+        # Recalculate index stats and other series to match target return
+        if bmk_type == 'fixed_shares':
+            idx_div = np.zeros((px.shape[0], 1))
+            idx_div[1:] = (div[1:] * px[:-1]) @ w_start
+
+            w = im.index_weights_over_time(w_start, px.values)
+            idx_vals = im.index_vals(w_start, px.values)
+            idx_tri = im.total_ret_index(w_start, px.values, idx_div * (1 - config.tax['div']))
+
+        elif bmk_type in ['var_weights', 'fixed_weights']:
+            # Calculate index prices and price returns
+            idx_rets = (d_px * inputs['w'].shift(1)).sum(axis=1)
+            idx_rets[0] = 0
+            idx_vals = (1 + idx_rets).cumprod()
+
+            # Calculate index dividends (in % and price points)
+            idx_div_yld = (div * inputs['w'].shift(1)).sum(axis=1)
+            idx_div_yld[0] = 0
+            idx_div = idx_div_yld * idx_vals.shift(1)
+
+            # Calculate index Total return (i.e. including dividends)
+            idx_tot_rets = idx_rets + idx_div_yld
+            idx_tri = (1 + idx_tot_rets).cumprod()
+
+        else:
+            raise NotImplementedError(f"Invalid benchmark type: {inputs['params']['benchmark_type']}")
 
     # Unpack cash info.  Different logic depening on whether the data is from excel or pickle
     if input_from_xl:
@@ -210,6 +251,10 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
     # Loop over periods, rebalance / harvest at each period, keep track of P&L
     # Initialize a list to keep simulation info
     sim_hist = init_sim_hist(port)
+
+    if config.TRACKING_RPT:
+        df_actv_w = inputs['px'] * 0
+
     t_date = sim_data['dates'][0]
 
     for t in range(1, n_steps + 1):
@@ -267,7 +312,7 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
                 # logging.info(opt_res['harvest_trades'])
 
         elif algorithm == 'heuristic':
-            #ToDo understand why it gives harvest = nan
+            # ToDo understand why it gives harvest = nan
             opt_res = heuristic_w_cash(port, t, sim_data, max_harvest)
             rebal_res = port.rebal_sim(trades=opt_res['opt_trades'], sim_data=sim_data, t=t)
 
@@ -292,9 +337,16 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
         else:
             clock_reset_tax = 0
 
+        # ToDo: to reduce tracking check if I can reduce overweight holdings that were
+        #  just reset or donated to reduce tracking
+        #  Write another algo to reduce tracking at zero tax after a donate or close reset exercise.
+        #  Think if I can make the donate and/or reset strategy more optimal
         sim_hist.append({'opt': opt_res, 'div': div, 'interest': interest,
                          'rebal': rebal_res, 'donate': donate_amount,
                          'clock_reset_tax': clock_reset_tax})
+
+        if config.TRACKING_RPT:
+            df_actv_w.iloc[t, :] = port.df_stocks['w_actv']
 
     # Liauidation tax at the end
     if params['final_liquidation'] > 0:
@@ -306,22 +358,34 @@ def run_sim_w_cash(inputs: dict, suffix: Optional[str], dir_path: str = '../resu
     log_port_report(port, n_steps)
 
     logging.info("\nSimulation results:")
-    df_report, sim_stats = gen_sim_report(sim_hist, sim_data)
-    logging.info(df_report.to_string())
+    sim_report, sim_stats = gen_sim_report(sim_hist, sim_data)
+    logging.info(sim_report.to_string())
     if save_files:
-        pd_to_csv(df_report, "steps", suffix=suffix, dir_path=dir_path)
+        pd_to_csv(sim_report, "steps", suffix=suffix, dir_path=dir_path)
 
     # Generate and save trade history
-    df_trades = trade_history(sim_hist, sim_data, shares_flag=True)
+    sim_trades = trade_history(sim_hist, sim_data, shares_flag=True)
     if save_files:
-        pd_to_csv(df_trades, "trades", suffix=suffix, dir_path=dir_path)
+        pd_to_csv(sim_trades, "trades", suffix=suffix, dir_path=dir_path)
 
     logging.info("\nSimulation statistics (annualized):")
     logging.info(sim_stats.to_string())
     if save_files:
         pd_to_csv(sim_stats, "stats", suffix=suffix, dir_path=dir_path)
 
-    return sim_stats, df_report
+    # Generate a tracking analysis report
+    if config.TRACKING_RPT:
+        _, top_tracking = tracking_analysis(sim_report, df_actv_w, sim_data)
+        if save_files:
+            for code in ['all']: # sim_tracking.keys(): <- use this to log longs and shorts
+                pd_to_csv(top_tracking[code], f"tracking_{code}", suffix=suffix,
+                          dir_path=dir_path)
+            # ToDo - also print top tracking by period and show calendar dates, not indices
+    else:
+        top_tracking = None
+
+
+    return sim_stats, sim_report, top_tracking
 
 
 def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
@@ -397,6 +461,71 @@ def gen_sim_report(sim_hist: list, sim_data: dict) -> tuple:
     return df_report, sim_stats
 
 
+def tracking_analysis(sim_report: pd.DataFrame, df_actv_w: pd.DataFrame,
+                      sim_data: dict, use_bmk: bool = False, verbose=True) -> Tuple[dict, dict]:
+    """ Generate a dictionary of several tracking reports
+    :param sim_report:  table of harvest, div, tracking, port_val vs. time
+    :param df_actv_w: dataframe with active weights at each step
+    :param sim_data: dict with input data for the simulation
+    :param use_bmk: if True calc tracking vs. bmk, else vs. portfolio (the differenceis the rebalancing frequency)
+    :param verbose: if True, print out reports
+    :return: dataframe with tracking analysis by stock
+    """
+
+    # Calculate a matrix of residual returns by stock (assume beta=1)
+    # Tracking is calculated vs. a 'perfectly replicated portfolio' with the same
+    # frequency as the simulation, not the actual index, which is rebalanced daily
+
+    # Calculate residual returns
+    if use_bmk:
+        raise NotImplementedError(f'Tracking vs. bmk not implemented')
+    else:
+        idx_rets = sim_data['idx_vals'].pct_change().fillna(0)
+    res_rets = sim_data['d_px'] - idx_rets[:, None]
+
+    # Tracking by stock
+    df_trk = (res_rets * df_actv_w.shift(1)).fillna(0)
+    trk_by_stk = pd.DataFrame(df_trk.sum(axis=0), columns=['cum tracking'])
+
+    full_track_dict = {'all': trk_by_stk}
+
+    # To the same table calc separate for longs and shorts
+    for code, sgn in zip(['long', 'short'], [1, -1]):
+        df_trk_1side = df_trk.where(df_actv_w * sgn > 0, 0)
+        trk_by_stk_1side = pd.DataFrame(df_trk_1side.sum(axis=0),
+                                        columns=['cum tracking ' + code])
+        full_track_dict[code] = trk_by_stk_1side
+
+    # Calc top results
+    n_top = 5
+    top_idx = list(range(n_top)) + [-n_top + x for x in range(n_top)]
+    top_dict = {}
+
+    for code in full_track_dict.keys():
+        col_name = 'cum tracking' + (" " + code if code != 'all' else "")
+        trk_one_case = (full_track_dict[code]).sort_values(by=[col_name])
+        df_top = trk_one_case.iloc[top_idx, :] * 100
+        top_dict[code] = df_top
+        logging.info(f"\nTop {n_top * 2} tracking stocks - {code}:")
+        logging.info(df_top.to_string())
+        if verbose:
+            print(f"\nTop {n_top * 2} tracking stocks - {code}:")
+            print(df_to_format(df_top, formats={'_dflt': '{:.2f}'}))
+
+    # Print top tracking by period
+    trk_ts = pd.DataFrame(df_trk.sum(axis=1).values, index=sim_data['dates'], columns=['tracking'])
+    trk_ts = trk_ts.sort_values(by=['tracking'])
+    top_trk_steps = trk_ts.iloc[top_idx] * 100
+    logging.info(f"\nTop {n_top * 2} tracking periods:")
+    logging.info(top_trk_steps.to_string())
+    if verbose:
+        print(f"\nTop {n_top * 2} tracking periods:")
+        print(df_to_format(top_trk_steps, formats={'_dflt': '{:.2f}'}))
+
+    # Tracking by date
+    return full_track_dict, top_dict
+
+
 # ***********************************************************
 # Entry point
 # ***********************************************************
@@ -418,8 +547,7 @@ if __name__ == "__main__":
     print(f"Disp Method = {inputs['disp_method'].name}")
 
     # Start the simulation
-    # TODO: add a timer using a context manager or a class, e.g. realpython
-    sim_stats, step_report = run_sim_w_cash(inputs, suffix=timestamp)
+    sim_stats, step_report, tracking = run_sim_w_cash(inputs, suffix=timestamp)
 
     # Print results: step report + simulation statistics
     print("\nTrade Summary (x100, %):")
@@ -428,4 +556,9 @@ if __name__ == "__main__":
 
     print("\nSimulation statistics (%):")
     print(df_to_format(pd.DataFrame(sim_stats * 100, columns=["annualized (%)"]), formats={'_dflt': '{:.2f}'}))
+
+    if config.TRACKING_RPT:
+        print('\nTracking Analysis %')
+        print(tracking)
+
     print("\nDone")

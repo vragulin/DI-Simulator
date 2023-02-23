@@ -43,14 +43,17 @@ def crop_dframe(df: pd.DataFrame, t_start: Optional[datetime.date] = None,
         d_start = d_end = None
         df1 = df.copy()
 
-        # Convert to date to datetime
         if t_start is not None:
-            d_start = datetime.datetime(t_start.year, t_start.month, t_start.day)
-            df1 = df1[df1.index >= d_start]
+            # Convert to date to datetime if needed (only in local namespace scope)
+            if isinstance(df1.index[0], datetime.datetime):
+                t_start = datetime.datetime(t_start.year, t_start.month, t_start.day)
+            df1 = df1[df1.index >= t_start]
 
         if t_end is not None:
-            d_end = datetime.datetime(t_end.year, t_end.month, t_end.day)
-            df1 = df1[df1.index <= d_end]
+            if isinstance(df1.index[0], datetime.datetime):
+                # Convert to date to datetime if needed
+                t_end = datetime.datetime(t_end.year, t_end.month, t_end.day)
+            df1 = df1[df1.index <= t_end]
 
         return df1
 

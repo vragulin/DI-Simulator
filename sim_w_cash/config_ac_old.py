@@ -5,8 +5,8 @@ import datetime
 import numpy as np
 
 # Annualization factor
-ANN_FACTOR = 252  # 240 <- used 240 for the old simulation, now use 252
-EMBA_IRR_Factor = 252 / ANN_FACTOR
+ANN_FACTOR = 240
+EMBA_IRR_Factor = 252 / 240
 LT_TAX_DAYS = 252
 
 # USE_EMBA_LT_CUT_OFF = True  # Tried to match lt_classification from EMBA but it's too messy
@@ -26,15 +26,14 @@ max_rise = 99  # this is recommended to avoid having index with very large singl
 # -----------------------------
 DEBUG_MODE = True
 VERBOSE_FREQ = 20  # frequency of printouts of simulation stats (in terms of # steps)
-TRACKING_RPT = True  # Save active weights into a dataframe
 
 # Simulation range (crop the original data to only use this simulation range)
 CROP_RANGE = True
-t_start = datetime.date(2012, 4, 2)  # Start of the simulation
-t_end = datetime.date(2023, 1, 19)  # Final date of the simulation
+t_start = datetime.date(2002, 6, 1)  # Start of the simulation
+t_end = datetime.date(2022, 6, 3)  # Final date of the simulation
 
 # Tax Rates
-# tax = {'st': 0, 'lt': 0}
+# tax = {'st': 0., 'lt': 0}
 tax = {'st': 0.50, 'lt': 0.28}
 # tax['st'] = tax['lt']
 tax['div'] = tax['lt']
@@ -44,7 +43,7 @@ tax['int'] = tax['st']
 trx_cost = 0
 
 # Risk-free rate
-int_rate = 0.0205
+int_rate = 0.02
 
 # Random seed for numpy
 np.random.seed(7)
@@ -62,7 +61,7 @@ threshold_step_prc = 0.05  # fraction of lots that we add at each iteration
 MAX_HVST_DFLT = 0.6
 
 # Data location for market data simulator
-sim_code = 'B500_10y'  # Assume we have a 30yr simulation window
+sim_code = 'mkt_clean'  # Assume we have a 30yr simulation window
 
 # EQ_ALLOC_PICKLE = "eq_alloc.pickle"  # Use momentum based on 12m return
 MOMENTUM_SIG_TYPE = 'TRAIL_EX_1'
@@ -83,10 +82,6 @@ elif sim_code == 'mkt_full':
     TR_PICKLE = "idx_t_rets.pickle"
     W_PICKLE = "idx_daily_w.pickle"
     PATHS_DIR = '../data/elm_sims/mkt_full/paths'
-elif sim_code in ['B500', 'B500_10y']:
-    DATA_DIR = r'C:\Users\vragu\OneDrive\Desktop\Proj\DirectIndexing\data\indices\B500'
-    PX_PICKLE = 'B500_sim_px.pickle'
-    TR_PICKLE = 'B500_sim_tri.pickle'
-    W_PICKLE = 'B500_sim_w.pickle'
+
 else:
     raise ValueError(f"Uknown sim_code={sim_code}")

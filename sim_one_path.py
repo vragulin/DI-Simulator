@@ -1,3 +1,4 @@
+
 """
     Direct index / tax harvesting simulation.  Based on James's embaTestbed2022.py.
     by V. Ragulin, started 3-Aug-2022
@@ -593,6 +594,7 @@ def heuristic_rebalance(port: PortLots, t: int, sim_data: dict, max_harvest: flo
 
     # If we have not bought enough, spread the shortfall across all remaining 'to buy' stocks
     # TODO - make sure that stocks with zero positions are included into 'to buy' stocks
+    #   Except stocks that have zero target weight
     shortfall = tot_mv_to_buy - df_stocks['buy_mv'].sum()
     if shortfall > 0:
         n_buys = (1 - df_stocks['to_sell']).sum()

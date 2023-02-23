@@ -115,6 +115,50 @@ class PortLots:
         port = cls(tickers, w_tgt=w_tgt, cash=cash, lots=lots, t_date=t_date)
         return port
 
+    @classmethod
+    def init_from_db(cls, lots: pd.DataFrame, w_tgt: pd.Series, **kwargs) -> PortLots:
+        """ Build a PortLots instance from the database data
+        :param lots:  position info
+        :param w_tgt:  target weight
+        :return: PortLots structure
+        """
+
+        # Generate a ticker list for the optimization - the union of existing positiosn + new basket
+        old_tickers = set(lots['bbg_ticker'])
+        new_tickers = set(w_tgt.index)
+        tickers = old_tickers | new_tickers
+        tickers.discard('Cash')
+        ticker_list = sorted(list(tickers))
+        port = PortLots(tickers=ticker_list)
+
+        # Set target weights
+        w_tgt_series = pd.Series(0, index=ticker_list)
+        w_tgt_series.update(w_tgt)
+        port.w_tgt = w_tgt_series.values
+        port.cash_w_tgt = 1.0 - sum(port.w_tgt)
+
+        # Set trade date
+        port.t_date = kwargs.get('t_date', dt.datetime.today())
+
+        # Set cash balance
+        port.cash = lots[lots['bbg_ticker'] == 'Cash']['quantity'].values[0]
+
+        # Set lots
+        df_lots = lots[['bbg_ticker', 'start_date', 'quantity', 'trade_px']]
+        df_lots = df_lots[df_lots['bbg_ticker'] != 'Cash'].reset_index(drop=True)
+        df_lots.columns = ['ticker', 'start_date', 'shares', 'basis']
+        port.df_lots = df_lots
+
+        # Position-level view
+        port.df_stocks = port.build_df_stocks()
+
+        # A placeholder for lot-related data used for fast tax calculation
+        port.lot_stats = {}
+        for field in ['exp_r_actv', 'sig_active', 'beta_active']:
+            setattr(port, field, 0)
+
+        return port
+
     def build_df_stocks(self) -> pd.DataFrame:
 
         """ Represent portfolio as a dataframe"""
@@ -174,7 +218,7 @@ class PortLots:
             output += f"Exp. Active Return(%): {self.exp_r_actv * 100:.3f}\n"
             output += f"Tracking Std. Dev (%): {self.sig_active * 100:.3f}\n"
             output += f"Active beta: {self.beta_active:.3f}\n"
-        except AttributeError:  # Portfolio has not been revalued
+        except (AttributeError, TypeError):  # Portfolio has not been revalued
             output += f"Tgt Cash (%): {self.cash_w_tgt * 100:.1f}\n"
             output += "Portfolio has not been revalued\n"
 
@@ -365,7 +409,6 @@ class PortLots:
             Don't worry about details like 'alpha', 'beta', etc. for now """
 
         # Update value date
-
         self.t_date = sim_data['dates'][t]
 
         # Update target stock weights and shares
@@ -396,6 +439,39 @@ class PortLots:
         # Update other attributes
         self.w_tgt = self.df_stocks['w_tgt']
         self.cash_w_tgt = 1.0 - self.w_tgt.sum()
+
+    def reval_from_db(self, prices: pd.DataFrame) -> None:
+        """ Update position values and populate all market-dependent columns
+        :param prices: dataframe with prices fetched from db
+        :return:  None (update the PortLots instance in place)
+        """
+
+        # Add market prices
+        df_stocks = self.df_stocks.copy()
+        df_stocks['price'] = prices['value']
+
+        # Check that we have prices for all stocks
+        if df_stocks['price'].isnull().any():
+            missing_px_stks = list(df_stocks[df_stocks['price'].isnull()].index)
+            print("Missing prices for stocks: ", end="")
+            print(missing_px_stks)
+            raise ValueError("Missing stock prices - see message above.")
+
+        # Calculate market values, weights and active positions
+        df_stocks['mkt_vals'] = df_stocks['shares'] * df_stocks['price']
+        self.port_value = df_stocks['mkt_vals'].sum() + self.cash
+        df_stocks['w'] = df_stocks['mkt_vals'] / self.port_value
+        df_stocks['w_actv'] = df_stocks['w'] - df_stocks['w_tgt']
+
+        # Add column of prices to the lots dataframe and calculate % gain
+        self.df_lots['price'] = self.df_lots['ticker'].apply(lambda x: df_stocks.loc[x, 'price'])
+
+        self.df_lots['%_gain'] = np.where(self.df_lots['basis'] > 0, self.df_lots['price']
+                                          / self.df_lots['basis'] - 1, self.infinity)
+
+        # Rename and re-arrange columns in a logical order and write it back into self
+        self.df_stocks = df_stocks[['w_tgt', 'w', 'w_actv', 'shares', 'price', 'mkt_vals',
+                                    'no_buys', 'no_sells']]
 
     def sim_report(self) -> str:
         """ Pretty print details of the simplified simulation portfolio"""

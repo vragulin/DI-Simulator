@@ -3,7 +3,9 @@ Useful functions to calculate index returns, weights, etc...
 This library assumes that an index is fully invested, i.e. has no cash
 """
 import numpy as np
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
+
+import pandas as pd
 from scipy.optimize import minimize
 from numba import njit
 
@@ -57,7 +59,7 @@ def index_weights_over_time(shares: np.array, prices: np.array) -> np.array:
 
 # @njit
 def index_vals(shares: np.array, prices: np.array, norm=False) -> np.array:
-    """ Calculate index weights over time for a static index w/o rebalancing
+    """ Calculate index values over time for a static index w/o rebalancing
         Axis 0 is time, axis 1 - stocks.
 
     :param shares: number of shares
@@ -72,6 +74,37 @@ def index_vals(shares: np.array, prices: np.array, norm=False) -> np.array:
         return idx_vals / idx_vals[0]
     else:
         return idx_vals
+
+
+def index_vals_from_weights(w: np.array, prices: np.array) -> Tuple[np.array, np.array]:
+    """ Calculate index values over time for an index with known weights
+        Axis 0 is time, axis 1 - stocks.
+
+    :param w: index weight at the close
+    :param prices: individual stock prices or returns indices
+    :return: a tuple of index values, and index returns over time
+    """
+
+    # Calculate stock returns
+    rets = np.zeros(prices.shape)
+    rets[1:] = prices[1:] / prices[:-1] - 1
+
+    # Index Rets = weight stock rets (use previous weights)
+    idx_rets = np.zeros(prices.shape[0])
+    idx_rets[1:] = (rets[1:] * w[:-1]).sum(axis=1)
+
+    idx_vals = (1+idx_rets).cumprod()
+    return idx_vals, idx_rets
+
+
+def index_vals_from_weights_pd(w: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
+    """ Wrapper around index_vals_from_weights for dataframes """
+
+    idx_vals_arr, idx_rets_arr = index_vals_from_weights(w.values, prices.values)
+    df = pd.DataFrame(idx_vals_arr, index=w.index, columns=['idx_val'])
+    df['idx_ret'] = idx_rets_arr
+
+    return df
 
 
 # @njit

@@ -96,8 +96,20 @@ def heuristic_w_cash(port: PortLots, t: int, sim_data: dict, max_harvest: float 
             df_stocks.loc[df_stocks.index[0], 'trade_mv'] = df_stocks['cum_mv_for_harv'].iloc[0]
             df_stocks['trade'] = -df_stocks['trade_mv'] / df_stocks['price']
 
+        # Mark stocks that exited the index for immediate sale.  Don't distinguish between stocks
+        # that were deleted in the last period or others with zero weights
+        # ToDo - in later versions, consider waiting until we can achieve LT gains treatment
+        df_stocks['deleted'] = np.abs(df_stocks['w_tgt']) < config.tol
+        if df_stocks['deleted'].any():
+            df_stocks['to_sell'] = df_stocks['to_sell'] | df_stocks['deleted']
+            df_stocks['trade'] = (-df_stocks['shares']).where(df_stocks['deleted'], df_stocks['trade'])
+            df_lots['stk_to_sell'] = df_lots['ticker'].apply(lambda x: df_stocks.loc[x, 'to_sell'])
+
         # Also sell stocks with w_actv > max_active_weight where we have long-term capital gains
-        if ('max_active_wgt' in params) and (df_stocks['w_actv'] > params['max_active_wgt']).any():
+        # excluding deleted stocks, which are dealt with separately
+        if ('max_active_wgt' in params) and (
+                (df_stocks['w_actv'] > params['max_active_wgt']) & ~df_stocks['deleted']).any():
+
             # Identify long-term lots for stocks where we have excess overweights
             df_lots['for_cutting_pos'] = (df_lots['w_actv'] > params['max_active_wgt']) \
                                          & (df_lots['long_term'])\
